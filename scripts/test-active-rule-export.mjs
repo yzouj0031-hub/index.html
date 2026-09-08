@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import WolfReasoningContext from '../reasoning-context.js';
 
 const root = new URL('../', import.meta.url);
 const html = fs.readFileSync(new URL('index.html', root), 'utf8');
@@ -37,6 +38,7 @@ ALL_ROLES.custom_god = {id:'custom_god',name:'星术师',team:'good',goodRoleCla
 ALL_ROLES.custom_civilian = {id:'custom_civilian',name:'记录员',team:'good',goodRoleClass:'villager',emoji:'',desc:'自创民牌说明。'};
 
 const sandbox = {
+  WolfReasoningContext,
   ALL_ROLES,
   window:{WolfI18n:null},
   uiEnglish:() => false,
@@ -123,7 +125,7 @@ for (const teachingMarker of ['【推理证据等级】','S：','视角漏洞','
 
 const i18nSource = fs.readFileSync(new URL('i18n.js', root), 'utf8');
 const i18nSandbox = {
-  window:{alert(){},confirm(){},prompt(){}},
+  window:{WolfReasoningContext,alert(){},confirm(){},prompt(){}},
   document:{addEventListener(){},querySelectorAll(){return[]},querySelector(){return null},body:{}},
   localStorage:{getItem(){return 'en'},setItem(){}},
   navigator:{language:'en'},

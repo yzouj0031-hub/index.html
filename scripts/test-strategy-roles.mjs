@@ -55,8 +55,9 @@ for (const file of clients) {
   expect(!src.includes('const livingMagician = S.players.some'), `${file}: wolf kill prompt still reads the hidden Magician survival state`);
   expect(!src.includes('const _magicianAlive'), `${file}: worldbook still reads the hidden Magician survival state`);
   expect(!src.includes('【🎩 魔术师仍存活') && !src.includes('\n魔术师仍存活，狼刀可能被换位') && !src.includes('🎩 魔术师仍存活，这把刀可能被交换重定向'), `${file}: player prompt still asserts hidden Magician survival as fact`);
-  expect(src.includes('魔术师换位·这是概率分支，不是后台存活情报'), `${file}: wolf prompt does not label Magician survival as uncertain evidence`);
-  expect(src.includes('D可以是任意合法目标，包括你自己或已知狼队友'), `${file}: anti-swap self/pack sacrifice outcome is not explicit`);
+  const sharedReasoning = fs.readFileSync('reasoning-context.js', 'utf8');
+  expect(src.includes('WolfReasoningContext.wolfChoice(S.players.map') && sharedReasoning.includes('不提供魔术师是否存活'), `${file}: shared wolf prompt lacks the hidden-state boundary`);
+  expect(sharedReasoning.includes('D可以是自己或已知队友，但不换时真的会损失该狼'), `${file}: anti-swap sacrifice outcome is not explicit`);
   expect(src.includes('const pactTargetCandidates = (viewer, english) => S.players') && src.includes('.filter(x => x.alive)'), `${file}: pact proposals do not receive all living legal nominal targets`);
   expect(!src.includes(".filter(x => x.alive && x.role.team !== 'bad')"), `${file}: pact target list still filters by hidden backend alignment`);
   expect(src.includes("const knownPackIds = new Set(aliveWolves.map(w => w.id))"), `${file}: pact target labels lack viewer-known pack membership`);

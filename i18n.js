@@ -457,13 +457,13 @@ Prefer the plain-language term when jargon would sound unnatural. Preserve playe
       if (seenRoleKeys.has(key)) return false;
       seenRoleKeys.add(key);
       return true;
-    });
+    }).sort((a,b) => String(a.customId || a.id).localeCompare(String(b.customId || b.id)));
     const activeIds = new Set(ids);
     const knownPackRoles = new Set(['werewolf','wolfking','wolfbeauty','whitewolf','wolfconcubine']);
     const knownPackCount = players.filter(p => p.role && knownPackRoles.has(p.role.id)).length;
     const counts = {};
     players.forEach(p => { if (p.role) { const n=p.role.customId ? p.role.name : (ROLE_EN[p.role.id]||p.role).name; counts[n]=(counts[n]||0)+1; } });
-    const config = Object.entries(counts).map(([n,c]) => c > 1 ? `${c} ${n}` : n).join(' + ');
+    const config = Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)).map(([n,c]) => c > 1 ? `${c} ${n}` : n).join(' + ');
     const lines = ['[ACTIVE GAME RULES · CONCISE EXPORT]', `Setup: ${players.length} players | ${config}`, '', '— Victory and flow —',
       opts.edge ? '• Edge victory: wolves win by eliminating every god-role or every civilian role present in the setup, or by reaching parity. Good wins by eliminating every wolf.' : '• City victory: wolves win only at parity. Eliminating one role category alone does not end the game. Good wins by eliminating every wolf.',
       `• Flow: night actions → first-day sheriff election → deaths announced → ${opts.singleRound ? 'one' : 'two'} daytime speech round(s) → vote. Extra speeches occur only when the system explicitly opens a tie/PK stage.`,
@@ -480,6 +480,7 @@ Prefer the plain-language term when jargon would sound unnatural. Preserve playe
     });
     lines.push('• Only the roles listed above exist in this match. Unlisted roles and their mechanics must not be used as premises for reasoning.');
     lines.push('', ...buildEnglishActiveRoleTiming(players));
+    lines.push(window.WolfReasoningContext.nightRules(activeIds, true));
     if (!opts.hardRulesOnly) lines.push('', '— Terminology —','• Use standard English Werewolf/Mafia terms: town, wolf result, town result, counterclaim, bussing, miselimination, voting pattern, and night-kill target. Never translate Chinese jargon literally.','', '— Evidence discipline —','• System verification and your own explicit private action results have highest priority; claims and last words are not automatic proof.','• A single slip, wording issue, rule-summary mismatch, or speaking style is suspicion only—not a standalone conviction.','• Repetition by several players is still one argument. Use voting patterns, sustained behavior, information access, and faction benefit.');
     return lines.join('\n');
   }

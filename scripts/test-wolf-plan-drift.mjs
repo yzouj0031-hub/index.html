@@ -1,83 +1,43 @@
-/**
- * 狼队计划黏性回归测试
- * 起因：狼第一夜定的方向被逐轮重复喂回 prompt，落款还写着"不要自相矛盾"，
- * 于是狼抱着一份早就作废的剧本打到死。这里锁死三件事：
- *   ① 保留的是每夜收尾那条，不是可能已被否决的开场提议；
- *   ② 每条标了距今多少轮；
- *   ③ 没有任何"必须坚持既定计划"的措辞，且第2轮起有强制重估题。
- */
-import { chromium } from 'playwright';
-import path from 'path';
+// Full objections survive; first/last speaker is not automatically consensus.
+// No model calls: the fixture only exercises the real prompt builders.
+import assert from 'node:assert/strict';
+import {withOfflinePage} from './lib/offline-browser.mjs';
 
-const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
-const page = await browser.newPage();
-const pageErrors = [];
-page.on('pageerror', e => pageErrors.push(e.message));
-await page.goto('file://' + path.resolve('index.html'));
-await page.waitForTimeout(2000);
-
-const res = await page.evaluate(() => {
-  const R = (typeof ALL_ROLES !== 'undefined') ? ALL_ROLES : null;
-  if (!R || !R.werewolf) return { fatal: 'ALL_ROLES 不可用' };
-  const mk = (id, n, k) => ({ id, name: n, alive: true, role: R[k], memory: [], deathRound: null, deathPhase: null, deathCause: null });
-
-  const setup = round => {
-    S.players = [mk(0,'阿狼','werewolf'), mk(1,'小狼','werewolf'), mk(2,'预言','seer'), mk(3,'女巫','witch'),
-                 mk(4,'猎人','hunter'), mk(5,'村甲','villager'), mk(6,'村乙','villager'), mk(7,'村丙','villager')];
-    S.round = round; S.phase = 'day'; S.gameId = 777; S.history = [];
-    if (typeof gameRecord !== 'undefined') gameRecord.length = 0;
-    S.wolfStrategyName = '压村甲';
-    S.wolfStrategy = '压村甲进抗推位，阿狼悍跳预言家做他查杀';
-    S.wolfStrategyLog = [
-      { round: 1, name: '阿狼', text: '开场提议：压村甲进抗推位' },
-      { round: 1, name: '小狼', text: '否掉了，村甲还没发言压他太生硬，改压猎人' },   // 当夜收尾 = 真正的共识
-      { round: 2, name: '小狼', text: '村甲已经被发金水了，压不动，换方向' },
-    ];
-    return S.players[0];
-  };
-
-  const r3 = buildSystemPrompt(setup(3));
-  const r1 = buildSystemPrompt(setup(1));
-
-  // ── 导出摘要 / 网页端接力：这两条路径只有 _buildPrivateInfoLines 那一行密约 ──
-  const w3 = setup(3); S.wolfStrategyRound = 1;
-  const priv3 = (_buildPrivateInfoLines(w3) || []).join('\n');
-  const web3 = buildWebPrompt(w3, {});
-  const w1 = setup(1); S.wolfStrategyRound = 1;
-  const priv1 = (_buildPrivateInfoLines(w1) || []).join('\n');
-  return { r3, r1, priv3, web3, priv1 };
+await withOfflinePage(async(page,origin)=>{
+  for (const file of ['index.html','en/index.html']) {
+    await page.goto(origin+'/'+file);
+    const out=await page.evaluate(()=>{
+      S.players=['werewolf','werewolf','villager','seer','witch','guard'].map((key,id)=>({
+        id,name:'Player'+id,alive:true,role:ALL_ROLES[key],memory:[]
+      }));
+      S.round=3;S.phase='night';S.history=[];S.sheriff=-1;gameRecord.length=0;
+      S.wolfStrategy='旧计划：推Player3';S.wolfStrategyName='旧计划';S.wolfStrategyRound=1;
+      S.wolfStrategyLog=[
+        {round:1,name:'Player0',text:'LEGACY_OPENING'},
+        {round:1,name:'Player1',text:'LEGACY_OBJECTION：不同意那个提议'}
+      ];
+      S.wolfChatHistory=[];
+      const legacy=buildSystemPrompt(S.players[0]);
+      S.wolfChatHistory=[
+        {round:2,name:'Player0',text:'UNACCEPTED_PROPOSAL '+ '讨论文字。'.repeat(60)+' TAIL_CORRECTION'},
+        {round:2,name:'Player1',text:'LATER_OBJECTION：这个理由不成立，应该换目标。'}
+      ];
+      const full=buildSystemPrompt(S.players[0]);
+      return {legacy,full,town:buildSystemPrompt(S.players[2]),
+        priv:_buildPrivateInfoLines(S.players[0]).join('\n'),web:buildWebPrompt(S.players[0])};
+    });
+    assert.match(out.legacy,/LEGACY_OPENING/);
+    assert.match(out.legacy,/LEGACY_OBJECTION/);
+    assert.match(out.full,/UNACCEPTED_PROPOSAL/);
+    assert.match(out.full,/TAIL_CORRECTION/);
+    assert.match(out.full,/LATER_OBJECTION/);
+    assert.doesNotMatch(out.full,/LEGACY_OPENING/);
+    assert.match(out.full,/个人提议，不是全队定案/);
+    assert.match(out.full,/不是承诺|预案，不是死命令/);
+    assert.doesNotMatch(out.full,/不要自相矛盾|一个都不许跳过/);
+    assert.doesNotMatch(out.town,/LEGACY_|UNACCEPTED_PROPOSAL|TAIL_CORRECTION|LATER_OBJECTION/);
+    assert.match(out.priv,/不是本局的行动纲领|预案/);
+    assert.match(out.web,/不是本局的行动纲领|预案/);
+    console.log(file+': full objections, legacy fallback, provisional plans and pack-only access passed');
+  }
 });
-
-if (res.fatal) { console.error('❌', res.fatal); process.exit(1); }
-const { r3, r1, priv3, web3, priv1 } = res;
-
-const checks = [
-  ['保留当夜收尾的共识而非开场提议', /否掉了，村甲还没发言压他太生硬/.test(r3)],
-  ['不再把被否决的开场提议当本夜策略', !/开场提议：压村甲进抗推位/.test(r3)],
-  ['过往条目标注了距今轮数', /2 轮前/.test(r3) && /1 轮前/.test(r3)],
-  ['落款不再要求"不要自相矛盾"', !/不要自相矛盾/.test(r3)],
-  ['明说这是记录不是承诺', /这是记录，不是承诺/.test(r3)],
-  ['明说保持一致本身不加分', /本身不加任何分/.test(r3)],
-  ['第2轮起注入强制重估三题', /动手之前，先在 thinking 里答这三题/.test(r3)],
-  ['重估题要求从零再想一遍', /假装你今天才醒过来/.test(r3)],
-  ['第1夜不注入重估题（还没有可重估的东西）', !/动手之前，先在 thinking 里答这三题/.test(r1)],
-  ['密约块的"该切就切"仍在', /该切就切/.test(r3)],
-  // 导出摘要 / 网页端接力：这两条路径原本只有一行光秃秃的"狼队密约：XXX"
-  ['摘要路径标出密约是第几夜定的', /第1夜定的开局预案/.test(priv3)],
-  ['摘要路径标出距今轮数', /距今 2 轮/.test(priv3)],
-  ['摘要路径写明不是行动纲领', /不是本局的行动纲领/.test(priv3)],
-  ['摘要路径写明第2天起由现在的场面决定', /由【现在的场面】决定/.test(priv3)],
-  ['网页端接力同样带上时效说明', /不是本局的行动纲领/.test(web3)],
-  ['第1夜当夜仍给"预案不是死命令"而非过期警告', /预案不是死命令/.test(priv1) && !/不是本局的行动纲领/.test(priv1)],
-];
-
-let bad = 0;
-for (const [n, ok] of checks) { console.log(ok ? `✅ ${n}` : `❌ ${n}`); if (!ok) bad++; }
-if (pageErrors.length) { console.error('页面错误:', pageErrors.slice(0, 5)); bad++; }
-if (bad) {
-  const i = r3.indexOf('【狼队过往商议记录');
-  console.error('\n--- 第3轮狼 prompt 片段 ---\n' + r3.slice(i, i + 1600));
-  console.error('\n--- 摘要/网页端密约行 ---\n' + (priv3.split('\n').filter(l => /密约/.test(l)).join('\n') || '(无)'));
-}
-await browser.close();
-process.exit(bad ? 1 : 0);
