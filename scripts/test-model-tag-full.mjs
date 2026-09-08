@@ -36,7 +36,10 @@ for (const file of ['index.html', 'en/index.html']) {
 
   // 开关接线：默认关闭（保持旧的品牌简称行为），打开才换成完整名
   assert.ok(html.includes('id="m-modeltag-full"'), `${file}: 缺少完整模型名开关`);
-  assert.ok(!/id="m-modeltag-full"[^>]*checked/.test(html), `${file}: 完整模型名开关不应默认开启`);
+  // 默认关闭（保持旧的品牌简称行为）。注意 onchange 里含 this.checked，不能用宽松正则判断
+  assert.ok(!/id="m-modeltag-full"\s+checked/.test(html) && !/checked\s+id="m-modeltag-full"/.test(html),
+    `${file}: 完整模型名开关不应默认开启`);
+  assert.ok(/id="m-modeltag"\s+checked/.test(html), `${file}: 对照——模型标签开关本应默认开启，断言方式可能失效`);
   assert.ok(html.includes("const fullEl = document.getElementById('m-modeltag-full');"), `${file}: 标签渲染未读取开关`);
   assert.ok(html.includes("const label = (fullEl && fullEl.checked && formatFullModelName(api.model)) || tag.label;"), `${file}: 未在开关打开时改用完整名`);
   // 长名要能截断，且原始 model id 仍在 title 里；标签正文必须转义
@@ -44,6 +47,13 @@ for (const file of ['index.html', 'en/index.html']) {
   assert.ok(html.includes('title="${escapeHtml(api.model)}"'), `${file}: title 未保留原始 model id 或未转义`);
   assert.ok(html.includes('>${escapeHtml(label)}</span>'), `${file}: 标签正文未转义`);
   assert.ok(html.includes('.modeltag-slot .model-tag { margin-left: 0 !important; font-size: 0.92em !important; padding: 0 4px !important; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }'), `${file}: 命牌槽位缺少截断样式`);
+  // 触屏没有悬停：完整模型名在命牌上必须能折成两行，而不是单行硬截断后永久看不见
+  assert.ok(html.includes('body.show-modeltag.show-modeltag-full .modeltag-slot { height: 2.5em; white-space: normal; text-overflow: clip; }'), `${file}: 完整模型名模式没有给命牌多留一行`);
+  assert.ok(html.includes('-webkit-line-clamp: 2;'), `${file}: 标签缺少两行截断`);
+  assert.ok(html.includes("document.body.classList.toggle('show-modeltag-full', !!(mtf && mtf.checked));"), `${file}: 未同步 show-modeltag-full 类`);
+  assert.ok(html.includes("onchange=\"document.body.classList.toggle('show-modeltag-full', this.checked);"), `${file}: 开关未即时切换 show-modeltag-full 类`);
+  assert.ok(html.includes('.lh { display:flex; align-items:center; flex-wrap:wrap;'), `${file}: 发言头部未允许换行，长标签会把按钮挤出屏幕`);
+
   // 存档往返
   assert.ok(html.includes("modeltagFull:$('m-modeltag-full')?$('m-modeltag-full').checked:false,"), `${file}: 未写入存档`);
   assert.ok(html.includes("if (d.modeltagFull !== undefined && $('m-modeltag-full')) $('m-modeltag-full').checked = !!d.modeltagFull;"), `${file}: 未从存档读取`);
