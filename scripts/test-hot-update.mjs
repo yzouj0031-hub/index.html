@@ -203,4 +203,14 @@ for (const f of ['sw.js', 'en/sw.js']) {
   ok(b.includes("'hot-update.js'"), 'build-www.mjs 必须收集 hot-update.js');
 }
 
+/* ⑰ 覆盖安装需要固定签名，并且 Android 原生 versionCode 必须随构建递增 */
+{
+  const workflow = readFileSync('.github/workflows/build-apk.yml', 'utf8');
+  ok(workflow.includes('ANDROID_KEYSTORE_BASE64'), 'APK 工作流必须支持固定发布签名');
+  ok(workflow.includes('s/versionCode [0-9]+/versionCode ${BUILD_NUMBER}/'),
+    'APK 工作流必须把递增构建号写入 Android versionCode');
+  ok(workflow.includes('versionName \\"1.0.${BUILD_NUMBER}\\"'),
+    'APK 工作流必须同步写入可见的 Android versionName');
+}
+
 console.log(`hot update: ${passed} 项检查通过`);

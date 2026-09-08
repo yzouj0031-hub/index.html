@@ -75,6 +75,17 @@ jobs:
       - name: Add Android platform
         run: npx cap add android
 
+      # Android also compares this native version when installing an APK over an
+      # existing copy. Keep it monotonic and aligned with the web bundle build so
+      # every release-signed APK can be installed as an in-place update.
+      - name: Stamp Android package version
+        env:
+          BUILD_NUMBER: ${{ steps.ver.outputs.build }}
+        run: |
+          sed -i -E "s/versionCode [0-9]+/versionCode ${BUILD_NUMBER}/" android/app/build.gradle
+          sed -i -E "s/versionName \"[^\"]+\"/versionName \"1.0.${BUILD_NUMBER}\"/" android/app/build.gradle
+          grep -E 'versionCode|versionName' android/app/build.gradle
+
       # @capgo/capacitor-updater pulls AndroidX WorkManager 2.10.x, whose
       # AAR metadata requires consumers to compile against Android API 35+.
       # Capacitor 6 still generates compileSdkVersion 34 by default, so raise
