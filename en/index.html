@@ -4715,6 +4715,9 @@ ALL_ROLES.guard.guide = ALL_ROLES.guard.guide.replace(
 ALL_ROLES.witch.guide = ALL_ROLES.witch.guide.replace(
   '那就【果断救】,别犹豫!没有守护承诺时,你不救=预言家直接死,这种"留药"是真送。',
   '没有守护承诺会降低“已经有人挡刀”的可信度，但仍要结合屠边压力、刀口价值、身份暴露和长期药效计算，不能只凭这一点自动得出必救。'
+).replace(
+  /(?:\n\n|\\n\\n)【跳与藏·按你的诉求决定，禁止中间状态】[\s\S]*?(?=(?:\n\n|\\n\\n)【行动事实不等于公开自证】)/,
+  '\n\n【跳与藏·按收益决定，避免无计划半跳】完整真报与完全隐藏是两条低污染标准路线，但不是系统强制的二选一。你也可以为了骗刀、隐藏毒药或保护队友而部分披露、暂缓交账或使用合法假药账；这类口径污染较高，必须有明确短期目标、评估误导好人的代价，并准备被压测后的澄清与退出条件。无计划地暗示“我知道昨晚的事但不方便说”通常最亏：狼能锁定你，好人却拿不到可用信息。无论公开怎么说，内部始终只按真实刀口、用药和剩余药水行动。'
 ) + '\n\n【银水与带队价值】救人不只增加一个存活人数，还会形成一条真实的救药行动记录。尤其第一夜，你可以在警长竞选中如实报出自己救过谁、争取警徽并带队；被救者也能成为阶段性的“银水”参考。但银水不是铁好（存在自刀等可能），跳身份也会暴露女巫，所以要把带队收益、身份暴露、刀口价值、屠边压力、守卫撞药风险与保留解药的信息价值一起计算，不能据此机械得出必救或不救。';
 ALL_ROLES.witch.guide += '\n\n【刀口权限·以解药库存为准】前文提到“你知道刀口”只适用于解药仍在的夜晚。使用解药的当夜仍能看到本夜刀口；从下一夜起，哪怕毒药还在，主持人也不会再提供刀口，你不能把未知目标说成自己看见的记录。';
 ALL_ROLES.witch.guide += '\n\n【与炼金魔女同场】女巫是第一救援位：你先按本夜刀口价值正常决定是否使用解药，不要为了猜测炼金魔女可能准备了法老之蛇而机械停药。只有你没有救下刀口时，系统才会让法老之蛇进行补救。';
@@ -4773,7 +4776,7 @@ const CUSTOM_ABILITY_BASE = ['seer','witch','guard','hunter','knight','magician'
 
 // ★ 积木技能元数据：可多选叠加，由通用引擎(NightActions.customGods + resolveNight)真实结算。
 const CUSTOM_BLOCKS = {
-  inspect:      {emoji:'🔮', label:'查验', g:'每晚可查验一名其他玩家，得知其阵营（狼人/好人）。这是你的核心情报，跳身份时如实报告。'},
+  inspect:      {emoji:'🔮', label:'查验', g:'每晚可查验一名其他玩家，得知其阵营（狼人/好人）。这是你的内部真实情报；对外口径可按策略调整，但假查验会高度污染好人判断，必须有明确目标和退出条件。'},
   protect:      {emoji:'🛡️', label:'守护', g:'每晚可守护一名玩家（可含自己），使其当晚免于狼刀；不能连续两晚守同一人。'},
   poison:       {emoji:'🧪', label:'毒药', g:'拥有一瓶毒药、整局一次性：某晚可毒杀一名玩家、当晚死亡（被毒者无法发动死亡技能）。用错=害死好人，慎用。'},
   save:         {emoji:'💉', label:'解药', g:'拥有一瓶解药、整局一次性：当晚有人被狼刀时可将其救活（有救药时你能看到当晚刀口）。'},
@@ -9525,7 +9528,7 @@ ${userPersona}
       const seerLines = Object.entries(S.seerLog).map(([round, info]) =>
         `第${round}夜：查验了${info.target}→${info.result}`
       );
-      keyParts.push('【查验结果·完整记录（每次跳身份都必须完整报出）】\n' + seerLines.join('\n'));
+      keyParts.push('【查验结果·内部真实完整记录（不可被公开口径改写）】\n' + seerLines.join('\n') + '\n⚠️这是你的真账本。完整真报是低污染标准路线；若选择部分披露或虚报，必须计算误导好人的代价并准备退出条件。');
     } else {
       const seerChecks = p.memory.filter(m => m.role==='system' && m.content.includes('【查验结果')).map(m => m.content).join('\n');
       if (seerChecks) keyParts.push(seerChecks);
@@ -15093,7 +15096,7 @@ const NightActions = {
       if(pair.length===2)S.nightData.imitatorSwap=pair.map(x=>x.id);
       gameRecord.push({type:'night_action',role:'imitator_use',round:S.round,name:im.name,target:pair.length===2?pair.map(x=>x.name).join('↔'):null,targets:pair.map(x=>x.name),skill,result:pair.length===2?'execute':'pass'});
       im.memory.push({role:'system', content:pair.length===2
-        ? '【摹取·镜像换位记录·私密】第'+S.round+'夜你交换了'+pair.map(x=>x.name).join(' ↔ ')+'。本夜狼刀若落在这两人之一，会转移到另一人身上。这是只有你知道的信息，白天不得泄露。'
+        ? '【摹取·镜像换位记录·私密】第'+S.round+'夜你交换了'+pair.map(x=>x.name).join(' ↔ ')+'。本夜狼刀若落在这两人之一，会转移到另一人身上。这是你的内部真实记录；是否公开、公开多少由局势决定，公开口径不会改变实际换位。'
         : '【摹取·镜像换位记录·私密】第'+S.round+'夜你没有完成换位，本夜没有任何人被交换。'});
       logPrivateNightResult(im,pair.length===2?'摹术师镜像换位：'+pair.map(x=>x.name).join(' ↔ '):'摹术师本夜没有发动镜像换位',pair.length===2?'The Imitator swapped '+pair.map(x=>x.name).join(' ↔ '):'The Imitator did not use the mirrored swap');return;
     }
@@ -16980,7 +16983,7 @@ ${mistDecisionHint}
         //   ① 导出聊天摘要看不到查验记录 ② 该预言家下一轮发言时 prompt 里
         //   拿不到查验信息，AI 只能现编。这里补齐，与 AI 分支保持一致。
         const resultText = reflected ? '被反弹到你自己，原目标未验证' : (iw ? '🐺狼人显示' : '✅好人显示（不等于精确身份或阵营翻牌）');
-        se.memory.push({role:'system',content:'【查验结果·重要】你尝试查验'+t.name+'→'+resultText+'。'+(reflected?'不得把'+t.name+'当作已经验过的好人或狼人。':'这是你的核心信息，跳身份时必须如实报告。')});
+        se.memory.push({role:'system',content:'【查验结果·重要】你尝试查验'+t.name+'→'+resultText+'。'+(reflected?'不得把'+t.name+'当作已经验过的好人或狼人。':'这是你的内部真实信息；公开口径可按策略调整，但不得改写真记录，虚报查验属于高污染操作。')});
         if (!S.seerLog) S.seerLog = {};
         S.seerLog[S.round] = {target:t.name, actualTarget:actual.name, reflected, result:reflected?'被反弹，原目标未验证':(iw?'🐺狼人显示':'✅好人显示')};
         gameRecord.push({type:'night_action', role:'seer', round:S.round, casterId:se.id, target:t.name, actualTarget:actual.name, reflected, result:reflected?'rebounded':(iw?'wolf':'good')});
@@ -17010,7 +17013,7 @@ ${mistDecisionHint}
         const reflected = actual.id !== t.id;
         const iw = seerSeesAsWolf(actual);
         const resultText = reflected ? '被反弹到你自己，原目标未验证' : (iw ? '🐺狼人显示' : '✅好人显示（不等于精确身份或阵营翻牌）');
-        se.memory.push({role:'system',content:'【查验结果·重要】你尝试查验'+t.name+'→'+resultText+'。'+(reflected?'不得把'+t.name+'当作已经验过的好人或狼人。':'这是你的核心信息，跳身份时必须如实报告。')});
+        se.memory.push({role:'system',content:'【查验结果·重要】你尝试查验'+t.name+'→'+resultText+'。'+(reflected?'不得把'+t.name+'当作已经验过的好人或狼人。':'这是你的内部真实信息；公开口径可按策略调整，但不得改写真记录，虚报查验属于高污染操作。')});
         if (!S.seerLog) S.seerLog = {};
         S.seerLog[S.round] = {target:t.name, actualTarget:actual.name, reflected, result:reflected?'被反弹，原目标未验证':(iw?'🐺狼人显示':'✅好人显示')};
         if (!isAnon()) Render.log('night-result',reflected?'🔮 预言家查验'+t.name+'被反弹，原目标未验证':'🔮 预言家查验'+t.name+'→'+(iw?'🐺狼人':'✅好人'));
@@ -17213,7 +17216,7 @@ ${mistDecisionHint}
       S.nightData.foolShield = t.id;
       if (!isAnon()) Render.log('night-result','🃏 愚者护住了'+(t.id===fl.id?'自己':t.name));
       gameRecord.push({type:'night_action', role:'fool', round:S.round, casterId:fl.id, target:t.name});
-      fl.memory.push({role:'system', content:'【🃏愚者·护盾记录·私密】第'+S.round+'夜你护住了'+(t.id===fl.id?'你自己':t.name)+'。这是只有你知道的信息，白天不得泄露。'});
+      fl.memory.push({role:'system', content:'【🃏愚者·护盾记录·私密】第'+S.round+'夜你护住了'+(t.id===fl.id?'你自己':t.name)+'。这是你的内部真实记录；是否公开、公开多少由局势决定，公开口径不会改变实际护盾。'});
     }
     Render.setSpeaking(fl.id, false);
   },
@@ -17426,7 +17429,7 @@ ${mistDecisionHint}
           logNightThinking(p, r);
           if (!/^\s*none\s*$/i.test((r.action||'').trim())) t = findPlayer(r.action, cand) || (r.thinking && findPlayer(extractSkillTarget(r.thinking, cand, 'guard'), cand));
         }
-        if (t) { S.nightData.customProtect.push(reflectEffectTarget(p, t.id, 'protect')); p._cLastGuard = t.id; if (!isAnon()) Render.log('night-result','🛡️ '+p.name+'守护了'+(t.id===p.id?'自己':t.name)); gameRecord.push({type:'night_action', role:'custom-protect', round:S.round, name:p.name, custom:p.role.name, target:(t.id===p.id?'自己':t.name)}); p.memory.push({role:'system', content:'【自创技能·守护记录·私密】第'+S.round+'夜你守护了'+(t.id===p.id?'你自己':t.name)+'。下一夜不能再守同一人。这是只有你知道的信息，白天不得泄露。'}); }
+        if (t) { S.nightData.customProtect.push(reflectEffectTarget(p, t.id, 'protect')); p._cLastGuard = t.id; if (!isAnon()) Render.log('night-result','🛡️ '+p.name+'守护了'+(t.id===p.id?'自己':t.name)); gameRecord.push({type:'night_action', role:'custom-protect', round:S.round, name:p.name, custom:p.role.name, target:(t.id===p.id?'自己':t.name)}); p.memory.push({role:'system', content:'【自创技能·守护记录·私密】第'+S.round+'夜你守护了'+(t.id===p.id?'你自己':t.name)+'。下一夜不能再守同一人。这是你的内部真实记录；是否公开、公开多少由局势决定。'}); }
         else p._cLastGuard = -1;
       }
       // 🔮 查验
@@ -17446,7 +17449,7 @@ ${mistDecisionHint}
           const iw = seerSeesAsWolf(actual);
           p.memory.push({role:'system', content:reflected
             ? '【查验结果·私密】你尝试查验'+t.name+'时被反弹到自己；原目标未被验证，不得当作已验好人或狼人。⚠️只有你知道。'
-            : '【查验结果·私密】你查验了'+t.name+'→'+(iw?'🐺狼人显示':'✅好人显示')+'。⚠️只有你知道，跳身份时如实报。'});
+            : '【查验结果·私密】你查验了'+t.name+'→'+(iw?'🐺狼人显示':'✅好人显示')+'。这是内部真记录；公开口径可按策略调整，但虚报查验属于高污染操作。'});
           if (!isAnon()) Render.log('night-result',reflected?'🔮 '+p.name+'的查验被反弹，原目标未验证':'🔮 '+p.name+'查验'+t.name+'→'+(iw?'🐺狼人':'✅好人'));
           gameRecord.push({type:'night_action', role:'custom-inspect', round:S.round, name:p.name, custom:p.role.name, target:t.name, actualTarget:actual.name, reflected, result:reflected?'rebounded':(iw?'wolf':'good')});
         }
@@ -17533,7 +17536,7 @@ ${mistDecisionHint}
           logNightThinking(p, r);
           t = findPlayer(r.action, cand) || (/自己|自我|自身/.test(r.action||'') ? p : null) || p;
         }
-        if (t) { S.nightData.customShield[p.id] = t.id; if (!isAnon()) Render.log('night-result','🛡️ '+p.name+'护住了'+(t.id===p.id?'自己':t.name)); gameRecord.push({type:'night_action', role:'custom-shield', round:S.round, name:p.name, custom:p.role.name, target:(t.id===p.id?'自己':t.name)}); p.memory.push({role:'system', content:'【自创技能·护盾记录·私密】第'+S.round+'夜你把护盾给了'+(t.id===p.id?'你自己':t.name)+'。这是只有你知道的信息，白天不得泄露。'}); }
+        if (t) { S.nightData.customShield[p.id] = t.id; if (!isAnon()) Render.log('night-result','🛡️ '+p.name+'护住了'+(t.id===p.id?'自己':t.name)); gameRecord.push({type:'night_action', role:'custom-shield', round:S.round, name:p.name, custom:p.role.name, target:(t.id===p.id?'自己':t.name)}); p.memory.push({role:'system', content:'【自创技能·护盾记录·私密】第'+S.round+'夜你把护盾给了'+(t.id===p.id?'你自己':t.name)+'。这是你的内部真实记录；是否公开、公开多少由局势决定。'}); }
       }
       // 🎁 赐予（复用奇迹商人机制：盾即时/查验毒次夜；幸运儿是狼→当场出局）
       if (ab.includes('grant') && others.length) {
@@ -27884,7 +27887,7 @@ function buildWebPrompt(p) {
     const deathAnnounce = S._lastNightDeaths && S._lastNightDeaths.length
       ? `\n昨晚死亡：${S._lastNightDeaths.map(id => S.players[id] ? S.players[id].name : '未知').join('、')}`
       : '\n昨晚：平安夜';
-    phaseBlock = `━━━━ 现在要做什么 ━━━━\n现在是白天讨论阶段（第${S.round}轮）。${deathAnnounce}${round2hint}${buildSpeakOrderFact(p)}\n\n轮到你公开发言。这是影响别人判断与票型的正式机会，不要只给一两句结论。请完整说清：你的当前立场或票意；至少一个具体言行、票型、公开事实或合法行动记录作为依据；以及你对前置位最关键观点的回应。若被点名质疑、处在身份对跳或主要出局位，必须逐项反驳并给出替代判断。如果你这轮决定公开身份，就把记录报完整；如果决定隐藏，就只用台面信息说话，不要暗示自己握有夜间信息；不要把单次口误包装成唯一答案，也不要机械复读前置位的整套逻辑。`;
+    phaseBlock = `━━━━ 现在要做什么 ━━━━\n现在是白天讨论阶段（第${S.round}轮）。${deathAnnounce}${round2hint}${buildSpeakOrderFact(p)}\n\n轮到你公开发言。这是影响别人判断与票型的正式机会，不要只给一两句结论。请完整说清：你的当前立场或票意；至少一个具体言行、票型、公开事实或合法行动记录作为依据；以及你对前置位最关键观点的回应。若被点名质疑、处在身份对跳或主要出局位，必须逐项反驳并给出替代判断。决定公开身份时，完整真报是低污染标准路线；若有明确战术，也可隐去部分记录或给出合法假口径，但必须保留内部真账本、计算误导队友的成本并准备退出条件。决定隐藏时只用台面信息说话，不要无计划地暗示自己握有夜间信息；不要把单次口误包装成唯一答案，也不要机械复读前置位的整套逻辑。`;
 
   } else if (S.phase === 'vote') {
     phaseBlock = `━━━━ 现在要做什么 ━━━━\n现在是投票阶段，不是发言阶段。\n存活玩家：${aliveList}\n\n只向主持人提交一个投票目标，输出“投票：玩家名”。不要追加公开发言、解释理由或向其他玩家提问；本阶段无人会回应。`;

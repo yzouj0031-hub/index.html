@@ -34,18 +34,20 @@ for (const file of ['index.html', 'en/index.html']) {
 const source = fs.readFileSync('teaching-worldbooks.js', 'utf8');
 expect(source.includes('【身份、行动事实与推理分开】'), 'official worldbook lacks perspective separation');
 expect(source.includes('石像鬼等能获知具体身份的角色'), 'official worldbook ignores exact-role informed counterclaims');
-expect(source.includes('【女巫：跳藏按诉求，不留中间态】'), 'official good-team worldbook lacks the witch claim-or-hide rule');
+expect(source.includes('【女巫：跳藏按诉求，避免无计划半跳】'), 'official good-team worldbook lacks the scoped witch disclosure rule');
+expect(source.includes('部分披露或虚报药账并非规则禁止'), 'official good-team worldbook still forbids strategic witch claims');
   expect(!source.includes('【女巫默认隐藏】'), 'official good-team worldbook still forces witch hiding');
 expect(!source.includes('预言家、女巫等若继续沉默会让假神长期控制归票和错误信息，通常应带着真实记录回应'), 'old generic reveal instruction remains');
 
 const preset = JSON.parse(fs.readFileSync('worldbook_ryuzaki_masterclass.json', 'utf8'));
 const byId = Object.fromEntries(preset.worldbooks.map(book => [book.id, book.content]));
 expect(byId.wb_advanced_evidence_endgame?.includes('身份、行动事实与推理分开'), 'exportable preset lacks identity/reasoning separation');
-expect(byId.wb_advanced_good_counterclaim?.includes('【女巫：跳藏按诉求，不留中间态】'), 'exportable preset lacks the witch claim-or-hide rule');
+expect(byId.wb_advanced_good_counterclaim?.includes('【女巫：跳藏按诉求，避免无计划半跳】'), 'exportable preset lacks the scoped witch disclosure rule');
+expect(byId.wb_advanced_good_counterclaim?.includes('部分披露或虚报药账并非规则禁止'), 'exportable preset still forbids strategic witch claims');
 
 if (failures.length) {
   console.error(failures.map(message => `FAIL ${message}`).join('\n'));
   process.exit(1);
 }
 
-console.log('witch guidance: claim-or-hide (no half-claim), perspective separation and complete public speech passed');
+console.log('witch guidance: scoped strategic disclosure, perspective separation and complete public speech passed');
