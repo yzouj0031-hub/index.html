@@ -87,6 +87,11 @@ for (const file of clients) {
   expect(src.includes("reflectTargetedNightSkill(dw, t.id, 'dream')"), `${file}: Dreamwalker is not connected to Eclipse Consort reflection`);
   expect(src.includes('const actualScry = reflectInspectSubject(gg, t)'), `${file}: Gargoyle scry is not connected to Eclipse Consort reflection`);
   expect(src.includes("reflectTargetedNightSkill(gu, submittedGuard, 'protect')"), `${file}: Guard reflection is not resolved in night-action order`);
+  expect(src.includes('【自守一致性】自守不是“保存神职”或“求稳”的默认按钮'), `${file}: Guard prompt still permits low-probability reflexive self-protection`);
+  expect(src.includes("recordTechnicalActionFailure(gu, '守卫守护'"), `${file}: Guard parse failures are not reported as technical failures`);
+  expect(src.includes('technical:guardActionTechnicalFailure'), `${file}: Guard technical failures are not preserved in the action record`);
+  expect(!src.includes('[守卫兜底] 无法识别目标，强制守自己'), `${file}: Guard parse failure still silently forces self-protection`);
+  expect(!src.includes('[守卫兜底] 随机守'), `${file}: Guard parse failure still invents a random target`);
   expect(src.includes("reflectTargetedNightSkill(wi, submittedWitchPoison, 'poison')"), `${file}: Witch poison reflection is not resolved in night-action order`);
   expect(src.includes('群体领域、自动信息、净化、救援、白天技与死亡技不受影响'), `${file}: Eclipse Consort exclusions are not documented`);
   expect(src.includes("case 'sanctuary-block'"), `${file}: missing god-view sanctuary record formatter`);
