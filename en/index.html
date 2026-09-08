@@ -550,7 +550,16 @@ body.show-modeltag .modeltag-slot:empty { display: block; }
    四舍五入之后卡片就分裂成 63/64 两种高度。写死高度才能保证一列排下来严丝合缝。
    标签本身是 nowrap 单行，裁不到东西。 */
 body.show-modeltag .modeltag-slot { height: 1.3em; overflow: hidden; }
-.modeltag-slot .model-tag { margin-left: 0 !important; font-size: 0.92em !important; padding: 0 4px !important; }
+/* 「完整模型名」开着时，命牌上的标签允许折成两行。
+   手机和平板没有鼠标悬停，title 里的完整 model id 根本触发不了——单行硬截断
+   等于把模型信息永久藏起来，而这个应用的主要用户就在触屏上。两行仍然是固定高度，
+   同一开关下全场卡片一样高，一列排下来不会参差。 */
+body.show-modeltag.show-modeltag-full .modeltag-slot { height: 2.5em; white-space: normal; text-overflow: clip; }
+body.show-modeltag.show-modeltag-full .modeltag-slot .model-tag {
+  white-space: normal !important; overflow-wrap: anywhere; line-height: 1.2;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; text-overflow: clip;
+}
+.modeltag-slot .model-tag { margin-left: 0 !important; font-size: 0.92em !important; padding: 0 4px !important; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 body.anon .pc:not(.isp):not(.stp) .rt { color: transparent; background: rgba(20,18,35,0.8); text-shadow: 0 0 5px #5a5080; }
 body.anon .pc:not(.isp):not(.stp) { border-color: rgba(245,160,184,0.08) !important; box-shadow: none !important; }
@@ -761,7 +770,7 @@ body.fx-lite *, body.fx-lite *::before, body.fx-lite *::after {
 body.blind-review .le.ending { display:none !important; }
 .le.meeting { border-left: 3px solid var(--cinnabar); background: linear-gradient(90deg, rgba(200,48,64,0.08), transparent); }
 
-.lh { display:flex; align-items:center; gap:7px; margin-bottom:4px; font-family:var(--font-title); font-weight:600; font-size:.85em; }
+.lh { display:flex; align-items:center; flex-wrap:wrap; gap:7px; margin-bottom:4px; font-family:var(--font-title); font-weight:600; font-size:.85em; }
 .lh .name { color: var(--gold-light); }
 .log-avatar { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; flex:0 0 24px; border:1px solid rgba(224,188,209,.2); border-radius:50%; background:linear-gradient(145deg,rgba(75,55,87,.72),rgba(28,23,43,.88)); color:#d9bfd0; font:600 .66em/1 var(--font-title); box-shadow:inset 0 1px rgba(255,255,255,.05); }
 .ending-state { display:inline-flex; align-items:center; min-height:18px; padding:1px 6px; border:1px solid currentColor; border-radius:3px; font-size:.62em; letter-spacing:.06em; opacity:.78; }
@@ -3206,6 +3215,7 @@ body.has-wp::after {
         <label class="mti" data-ui-icon="gavel" title="开启后，每晚狼队刀人时会弹框让你（导演）亲自决定刀口。只控制一名狼或纯观战时直接覆盖AI决定；同时控制多名狼时，每名狼各投一票，空刀与具体刀口等权。关闭则全体狼队民主投票（默认）"><input type="checkbox" id="m-director-veto">导演刀口主控</label>
         <label class="mti" data-ui-icon="wrench" title="开启后AI异常（失败/过短/过滤/复读/元指令）时弹出三选一对话框：手写代替 / 备用API / 重试主API。关闭则自动切备用API（原行为）。"><input type="checkbox" id="m-manual-retry" checked>手动重试</label>
         <label class="mti" data-ui-icon="tag" title="在命牌和发言旁显示AI模型标签，方便录屏辨识"><input type="checkbox" id="m-modeltag" checked onchange="S.players&&S.players.forEach(p=>Render.card(p))">模型标签</label>
+        <label class="mti" data-ui-icon="tag" title="开启后模型标签显示完整模型名（如 Claude Opus 4.5、Gemini 3 Pro），关闭则只显示品牌简称（如 Claude、Gemini）。命牌上名字过长会截断，鼠标悬停可看完整模型 ID。"><input type="checkbox" id="m-modeltag-full" onchange="document.body.classList.toggle('show-modeltag-full', this.checked);S.players&&S.players.forEach(p=>Render.card(p))">完整模型名</label>
         </div>
       </details>
       <details class="mset-g" data-grp="av">
@@ -6444,6 +6454,56 @@ const MODEL_BRANDS = [
   { label: 'Ernie',     color: '#3858c8', match: ['ernie', 'eb-'] },
 ];
 
+// ★ 完整模型名：把原始 model id 整理成可读的全名（Claude Opus 4.5 / Gemini 3 Pro / DeepSeek R1）。
+//   品牌简称（MODEL_BRANDS 的 label）只说得出"是哪家"，说不出"是哪一档"——同为 Claude 的
+//   Opus 和 Sonnet、同为 GPT 的 5 和 4o 在标签上会长得一模一样，录屏和复盘时分不出谁是谁。
+//   这里只做显示层的清洗与美化，不改变任何用于请求的 model 字段。
+const MODEL_WORD_CASE = {
+  gpt:'GPT', chatgpt:'ChatGPT', glm:'GLM', chatglm:'ChatGLM', minimax:'MiniMax',
+  deepseek:'DeepSeek', openai:'OpenAI', qwen:'Qwen', kimi:'Kimi', moonshot:'Moonshot',
+  llama:'Llama', mistral:'Mistral', hunyuan:'Hunyuan', baichuan:'Baichuan', ernie:'ERNIE',
+  doubao:'Doubao', grok:'Grok', gemini:'Gemini', claude:'Claude', opus:'Opus',
+  sonnet:'Sonnet', haiku:'Haiku', flash:'Flash', pro:'Pro', mini:'Mini', nano:'Nano',
+  max:'Max', turbo:'Turbo', plus:'Plus', lite:'Lite', air:'Air', fast:'Fast',
+  thinking:'Thinking', reasoning:'Reasoning', preview:'Preview', instruct:'Instruct',
+  chat:'Chat', exp:'Exp', vl:'VL', moe:'MoE'
+};
+function formatFullModelName(modelStr) {
+  let s = String(modelStr == null ? '' : modelStr).trim();
+  if (!s) return '';
+  const raw = s;
+  s = s.replace(/^\[[^\]]*\]\s*/, '');            // 去掉 [自定义渠道] 前缀
+  s = s.split('/').pop();                          // openai/gpt-5 → gpt-5
+  s = s.replace(/^(?:us|eu|apac)\./i, '');         // bedrock 区域前缀
+  s = s.replace(/^(?:anthropic|google|openai|meta|mistral)\./i, '');
+  s = s.replace(/[:@](?:free|latest|beta|nitro|online|thinking)$/i, '');
+  s = s.replace(/-v\d+:\d+$/i, '');                // bedrock 版本尾巴 -v1:0
+  s = s.replace(/[-_](?:\d{8}|\d{4}-\d{2}-\d{2})$/, ''); // 日期戳
+  s = s.replace(/[-_]latest$/i, '');
+  const parts = s.split(/[-_\s]+/).filter(Boolean);   // 不切小数点：4.5 / abab6.5s 要保持完整
+  if (!parts.length) return raw;
+  // 连续纯数字段合并成小数：claude-opus-4-5 → Claude Opus 4.5
+  const merged = [];
+  for (const seg of parts) {
+    if (/^\d+$/.test(seg) && merged.length && /^\d+(?:\.\d+)*$/.test(merged[merged.length - 1])) {
+      merged[merged.length - 1] += '.' + seg;
+    } else {
+      merged.push(seg);
+    }
+  }
+  return merged.map(seg => {
+    const low = seg.toLowerCase();
+    if (MODEL_WORD_CASE[low]) return MODEL_WORD_CASE[low];
+    // 品牌名和版本号粘在一起：qwen3 → Qwen 3、glm4 → GLM 4
+    const stuck = low.match(/^([a-z]+)(\d+(?:\.\d+)*)$/);
+    if (stuck && MODEL_WORD_CASE[stuck[1]]) return MODEL_WORD_CASE[stuck[1]] + ' ' + stuck[2];
+    if (/^\d+(?:\.\d+)*$/.test(seg)) return seg;      // 4 / 4.5
+    if (/^[a-z]\d+$/i.test(seg)) return seg.toUpperCase(); // o3 / r1 / k2 / v3
+    if (/^\d+[a-z]+$/i.test(seg)) return seg.toLowerCase(); // 4o / 20b
+    return seg.charAt(0).toUpperCase() + seg.slice(1);
+  }).join(' ');
+}
+
 function getModelTag(modelStr) {
   if (!modelStr) return null;
   const s = modelStr.toLowerCase();
@@ -6472,7 +6532,11 @@ function getModelTagHtml(p, opts) {
   // rgba 半透明背景（从hex转）
   const hex = tag.color.replace('#','');
   const r = parseInt(hex.substr(0,2),16), g = parseInt(hex.substr(2,2),16), b = parseInt(hex.substr(4,2),16);
-  return `<span class="model-tag" title="${api.model}" style="display:inline-block;font-size:${fs};padding:${pad};margin-left:4px;border-radius:3px;background:rgba(${r},${g},${b},0.18);color:${tag.color};border:1px solid rgba(${r},${g},${b},0.35);vertical-align:middle;font-family:-apple-system,'SF Pro',sans-serif;letter-spacing:0.02em;font-weight:500;white-space:nowrap">${tag.label}</span>`;
+  // 「完整模型名」开关打开时，标签正文换成整理过的全名；颜色仍取品牌色，
+  // title 永远是原始 model id，便于悬停核对被截断的长名。
+  const fullEl = document.getElementById('m-modeltag-full');
+  const label = (fullEl && fullEl.checked && formatFullModelName(api.model)) || tag.label;
+  return `<span class="model-tag" title="${escapeHtml(api.model)}" style="display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;font-size:${fs};padding:${pad};margin-left:4px;border-radius:3px;background:rgba(${r},${g},${b},0.18);color:${tag.color};border:1px solid rgba(${r},${g},${b},0.35);vertical-align:middle;font-family:-apple-system,'SF Pro',sans-serif;letter-spacing:0.02em;font-weight:500;white-space:nowrap">${escapeHtml(label)}</span>`;
 }
 /* 正字计数法 */
 function toZheng(n) {
@@ -7873,6 +7937,7 @@ function saveCfg() {
     spd:$('g-spd').value, anon:$('m-anon').checked, trial:$('m-trial').checked,
     hdeath:$('m-hdeath').checked, mbti:$('m-mbti').checked, cosplay:$('m-cosplay').checked, blindNames:$('m-blindnames')?$('m-blindnames').checked:false, hardcore:$('m-hardcore')?$('m-hardcore').checked:false, cnames:$('cnames').value, lastwill:$('m-lastwill')?$('m-lastwill').value:'first', killEdge:$('m-kill-edge')?$('m-kill-edge').checked:false, singleRound:$('m-single-round')?$('m-single-round').checked:false, knightChain:$('m-knight-chain')?$('m-knight-chain').checked:false, sheriffDailyOrder:$('m-sheriff-daily-order')?$('m-sheriff-daily-order').checked:false,
     modeltag:$('m-modeltag')?$('m-modeltag').checked:true,
+    modeltagFull:$('m-modeltag-full')?$('m-modeltag-full').checked:false,
     thinking:$('m-thinking')?$('m-thinking').checked:true,
     reasoningMode:$('g-reasoning-mode')?$('g-reasoning-mode').value:'smart',
     freeOutput:$('m-free-output')?$('m-free-output').checked:true,
@@ -7939,6 +8004,7 @@ function loadCfg() {
     if (d.blindNames !== undefined && $('m-blindnames')) $('m-blindnames').checked = !!d.blindNames;
     if (d.hardcore !== undefined && $('m-hardcore')) $('m-hardcore').checked = d.hardcore;
     if (d.modeltag !== undefined && $('m-modeltag')) $('m-modeltag').checked = d.modeltag;
+    if (d.modeltagFull !== undefined && $('m-modeltag-full')) $('m-modeltag-full').checked = !!d.modeltagFull;
     if (d.thinking !== undefined && $('m-thinking')) $('m-thinking').checked = d.thinking;
     if ($('g-reasoning-mode')) {
       $('g-reasoning-mode').value = d.reasoningMode
@@ -28404,6 +28470,9 @@ if ('serviceWorker' in navigator &&
     // 命牌里那一行模型标签只在开关打开时占位，否则每张卡白多一行高度
     var mt = document.getElementById('m-modeltag');
     document.body.classList.toggle('show-modeltag', !!(mt && mt.checked));
+    // 完整模型名比简称长得多，命牌上要多留一行；同样只在开关打开时占位
+    var mtf = document.getElementById('m-modeltag-full');
+    document.body.classList.toggle('show-modeltag-full', !!(mtf && mtf.checked));
   }
   function bind(){
     sync();
