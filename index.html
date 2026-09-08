@@ -10420,9 +10420,16 @@ ${userPersona}
       continue;
     }
     if (r.type === 'death') {
-      const phase = _timelinePhase(r);
       const cause = _formatPlayerVisibleDeathCause(r, {compact:true});
-      _pushTimeline(phase, '已发生·系统事实', `${r.name}出局：${cause}`);
+      const _deathPh = r.phase || r.deathPhase;
+      const _deathRd = Number.isFinite(r.round) ? r.round : (S.round || 1);
+      // ★ 夜间死亡在 gameRecord 里的位置就是它被【公布】的时刻（首日在警长竞选之后）。
+      //   以前标成“第N夜”，会让时间轴出现 第N天·警长竞选 → 第N夜 的倒序标签，AI 按标签
+      //   重排后就以为竞选时大家已经知道谁死了。现在标成“第N天·天亮公布”，并在正文注明死于第N夜。
+      const phase = _deathPh === 'night' ? `第${_deathRd}天·天亮公布` : _timelinePhase(r);
+      _pushTimeline(phase, '已发生·系统事实', _deathPh === 'night'
+        ? `${r.name}出局：${cause}（死于第${_deathRd}夜，天亮后才公布；公布之前没有人知道）`
+        : `${r.name}出局：${cause}`);
       if ((r.phase || r.deathPhase) === 'day' && Number.isFinite(r.round)) {
         _pushTimeline(phase, '系统自动取消', `${r.name}已在第${r.round}天白天死亡，不能进入第${r.round+1}夜；其生前声明的第${r.round+1}夜及以后查验、守护、用药、交换、袭击等计划全部作废。`);
       }
@@ -10437,6 +10444,9 @@ ${userPersona}
       continue;
     }
     if (r.type === 'sheriff_roster') {
+      if (r.stage === 'signup') {
+        _pushTimeline(`第${r.round || 1}天·警长竞选`, '已发生·系统事实', `天亮，进入警长竞选。第${r.round || 1}夜的行动已全部完成，但昨夜死讯【尚未公布】：此刻没有人知道昨晚谁死了、是不是平安夜；竞选中的任何发言都发生在夜间行动之后，不可能影响或解释昨夜的行动。`);
+      }
       _pushTimeline(`第${r.round || 1}天·警长竞选`, '已发生·系统事实', r.text || '警长候选名单已更新');
       continue;
     }
@@ -10454,7 +10464,15 @@ ${userPersona}
       let phase = _timelinePhase(r);
       const nm = String(r.text).match(/^第(\d+)(夜|天)$/);
       if (nm) phase = nm[2] === '夜' ? `第${nm[1]}夜` : `第${nm[1]}天·白天`;
-      _pushTimeline(phase, r.technical ? '技术记录' : '已发生·系统事实', r.text);
+      let _txt = r.text;
+      if (nm && nm[2] === '夜') {
+        _txt = nm[1] === '1'
+          ? `第1夜开始：狼刀、查验、用药、守护等所有夜间行动在此完成并已成定局；此时没有任何白天信息。结果要到天亮、警长竞选结束后才公布。`
+          : `第${nm[1]}夜开始：本夜所有行动只能依据第${Number(nm[1]) - 1}天白天结束前已存在的信息；行动在此完成并已成定局，结果天亮后公布。`;
+      } else if (nm) {
+        _txt = `第${nm[1]}天白天开始（第${nm[1]}夜的结果已公布）`;
+      }
+      _pushTimeline(phase, r.technical ? '技术记录' : '已发生·系统事实', _txt);
     }
   }
   const _currentTimelinePhase = S.phase === 'night' ? `第${S.round}夜`

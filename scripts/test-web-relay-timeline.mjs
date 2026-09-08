@@ -135,6 +135,11 @@ for (const file of ['index.html', 'en/index.html']) {
     '时间顺序铁律：🌙第1夜 → ☀️第1天',
     '第${S.round}天（第${S.round}夜已结束）',
     '【硬事实】第${S.round}夜已经结束',
+    // 内置 API 路径的「权威事件时间轴」也要按公布时刻打标签，不能出现 第N天·警长竞选 → 第N夜 的倒序
+    "const phase = _deathPh === 'night' ? `第${_deathRd}天·天亮公布` : _timelinePhase(r);",
+    '死于第${_deathRd}夜，天亮后才公布；公布之前没有人知道',
+    '第1夜开始：狼刀、查验、用药、守护等所有夜间行动在此完成并已成定局',
+    '但昨夜死讯【尚未公布】：此刻没有人知道昨晚谁死了',
   ]) {
     assert.ok(html.includes(marker), `${file}: 缺少标记 ${marker}`);
   }
