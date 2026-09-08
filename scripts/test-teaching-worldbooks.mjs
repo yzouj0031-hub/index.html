@@ -157,7 +157,7 @@ if (!wolfGuide.includes('悍跳不是报一句身份') || wolfGuide.includes('�
   throw new Error('official wolf strategy is missing or leaked whitecat-only guidance');
 }
 const guardGuide = wb.buildOfficialKnowledge({roleId:'guard',team:'good',phase:'night'});
-if (!guardGuide.includes('保存逐夜守护账本') || guardGuide.includes('悍跳不是报一句身份')) {
+if (!guardGuide.includes('真实逐夜账本') || !guardGuide.includes('合法但不真实的行动口径') || guardGuide.includes('悍跳不是报一句身份')) {
   throw new Error('official guard strategy routing is wrong');
 }
 const officialVillagerGuide = wb.buildOfficialKnowledge({roleId:'villager',team:'good',phase:'day'});
