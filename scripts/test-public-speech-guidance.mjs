@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import './test-private-plan-boundary.mjs';
 
 for (const file of ['index.html', 'en/index.html']) {
   const source = fs.readFileSync(file, 'utf8');
@@ -32,8 +33,6 @@ for (const file of ['index.html', 'en/index.html']) {
   assert.match(source, /不得少于80字。投票前最后发言要把核心论据说透/, `${file}: second-round speech still has a weaker floor`);
   assert.match(source, /const isFreeOutput = baseFreeOutput && !opts\.wolfOnly && !opts\.skillConfirm/, `${file}: action confirmations may be polluted by public speech mode`);
   assert.match(source, /\[计划\]目标；下一步；计划成立的前提；退出或改线条件\[\/计划\]/, `${file}: free output cannot leave a private cross-turn plan`);
-  assert.match(source, /const planMatch = c\.match\(\/<plan>/, `${file}: structured plan parsing is missing`);
-  assert.match(source, /\|\| c\.match\(\/\[\\\[【\]/, `${file}: bracketed free-output plan parsing is missing`);
 
   const parseStart = source.indexOf('function parseAI(c, opts)');
   const parseEnd = source.indexOf('// ★ 从 thinking 抢救发言', parseStart);

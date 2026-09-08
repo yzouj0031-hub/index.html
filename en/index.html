@@ -8387,6 +8387,10 @@ function parseAI(c, opts) {
   c = c.replace(/<!--[\s\S]*?-->/g, '');                    // 注释标记（草稿演练注释头也一并剥离）
   c = c.replace(/^\s*```[a-zA-Z]*\s*$/gm, '');              // ★ markdown代码围栏行（```xml / ```）——部分模型/网页AI会把整段输出包进代码块，围栏会干扰标签提取；只删纯围栏行，不动正文
 
+  const privateParts = splitPrivatePlanBlocks(c);
+  c = privateParts.visible;
+  let plan = privateParts.plan;
+
   // ★★ 核心修复：标签自动补闭合 ★★
   //   实测最高频的"沉默"成因：模型其实有完整输出，但标签开了没闭合/漏闭合，
   //   导致后续提取正则把"思考+发言"整段吞进 thinking，game 提取为空 → 误判沉默。
@@ -8596,7 +8600,7 @@ function parseAI(c, opts) {
 
   // 3. 完全没有标签 → 整个输出就是发言
   if (!game && !thinking) {
-    game = c.replace(/<strategy>[\s\S]*?<\/strategy>/gi, '').replace(/<plan>[\s\S]*?<\/plan>/gi, '').replace(/[\[【]\s*计划\s*[\]】][\s\S]*?[\[【]\s*\/\s*计划\s*[\]】]/g, '').replace(/<\/?(?:thinking|game|action|strategy|plan)[^>]*>/gi, '').trim();
+    game = c.replace(/<strategy>[\s\S]*?<\/strategy>/gi, '').replace(/<\/?(?:thinking|game|action|strategy)[^>]*>/gi, '').trim();
   }
 
   // 3.5 ★ 原生思考分离专用：思考已由 thought 字段隔离，传入的 c 就是纯发言。
@@ -8672,6 +8676,11 @@ function parseAI(c, opts) {
     }
   }
 
+  // Fallbacks may draw from native thinking; marked plans stay private there too.
+  const recoveredParts = splitPrivatePlanBlocks(game);
+  game = recoveredParts.visible;
+  if (!plan) plan = recoveredParts.plan;
+
   // 5. ★ 自由输出兜底：没有 <action> 标签时，从 game 里提取投票目标
   //    匹配"我投X""投X""支持出X""我选X"等句式，取存活玩家名
   if (!action && game) {
@@ -8725,7 +8734,7 @@ function parseAI(c, opts) {
     //   场景：GPT-5 把 "<interrupt>no</interrupt> 我提议..." 整段写到 game 里
     //   不剥离会导致显示出来很奇怪，且后续提取目标受干扰
     game = game.replace(/<interrupt>[\s\S]*?<\/interrupt>/gi, '').trim();
-    game = game.replace(/<strategy>[\s\S]*?<\/strategy>/gi, '').replace(/<plan>[\s\S]*?<\/plan>/gi, '').replace(/[\[【]\s*计划\s*[\]】][\s\S]*?[\[【]\s*\/\s*计划\s*[\]】]/g, '').trim();
+    game = game.replace(/<strategy>[\s\S]*?<\/strategy>/gi, '').trim();
     game = game.replace(/<\/?(?:interrupt|strategy)[^>]*>/gi, '').trim();
     // ★ 草稿过滤：移除 [草稿]...[/草稿] 和 HTML 注释，这是 AI 的内心思考，不应该输出
     //   兼容多种写法：[草稿]/[/草稿]、【草稿】/【/草稿】、<!-- -->、[draft]/[/draft]
@@ -8920,7 +8929,7 @@ function parseAI(c, opts) {
     }
   }
 
-  if (!game) game = '(沉默)';
+  if (!game && requireGame) game = '(沉默)';
 
   // ── 拒绝检测 ──
   // ★ v4修复：原"抱歉.{0,20}不能"会把角色对话里的"抱歉了...看不清楚"误判为拒绝
@@ -8975,18 +8984,6 @@ function parseAI(c, opts) {
   const stratMatch = c.match(/<strategy>([\s\S]*?)<\/strategy>/i);
   if (stratMatch) strategy = stratMatch[1].replace(/<\/?(?:strategy|game|action|thinking)[^>]*>/gi,'').trim();
 
-  // ★ 战略便签：AI 给未来的自己留的一句"作战计划"，下回合会拼回它的 prompt。
-  //   规则：可留空(None)，但只要写就要具体。这里只做提取与"废话过滤"，具体注入见 buildPrompt。
-  let plan = '';
-  const planMatch = c.match(/<plan>([\s\S]*?)<\/plan>/i)
-                 || c.match(/[\[【]\s*计划\s*[\]】]([\s\S]*?)[\[【]\s*\/\s*计划\s*[\]】]/);
-  if (planMatch) {
-    let raw = planMatch[1].replace(/<\/?(?:plan|strategy|game|action|thinking)[^>]*>/gi,'').trim();
-    // 过滤"正确的废话"：太短、或纯泛泛而谈的，一律当没写
-    const junk = /^(none|无|暂无|继续观察|再看看|观察局势|保持潜伏|继续潜伏|看情况|随机应变|见机行事|正常发言|继续|等待|待定|tbd|n\/a)[。.\s]*$/i;
-    if (raw.length >= 8 && !junk.test(raw)) plan = raw;
-  }
-
   // ── 提取 interrupt（v9.2 狼队回响轮专用，AI 显式表达"我要打断/反驳"）──
   //   值通常是 yes/no/true/false,代码侧用 parseInterruptField 判定
   let interrupt = '';
@@ -9005,6 +9002,34 @@ function parseAI(c, opts) {
     }
   }
   return { thinking, game, action, strategy, plan, interrupt, _isRepeatSilent: isRepeatSilent, _isRefusal: isRefusal, _isMetaInstruction: isMetaInstruction, _isLeak: _isLeak, _monologueStripped };
+}
+
+// Remove private plan blocks before speech/action fallback parsing.
+// Unclosed blocks end only at an explicit sibling tag or the end of the reply.
+function splitPrivatePlanBlocks(rawText) {
+  const text = String(rawText || '').replace(/__LT__|&lt;/g, '<').replace(/__GT__|&gt;/g, '>');
+  const open = /<\s*plan\s*>|[\[【]\s*(?:计划|plan)\s*[\]】]/gi;
+  const close = /<\s*\/\s*plan\s*>|[\[【]\s*\/\s*(?:计划|plan)\s*[\]】]/gi;
+  const sibling = /<\s*\/?\s*(?:thinking|draft|game|action|interrupt|strategy|plan)\s*>|[\[【]\s*\/?\s*(?:思考|草稿|thinking|draft|game|发言|公开发言|action|行动|投票|计划|plan)\s*[\]】]/gi;
+  const visible = [], plans = [];
+  let cursor = 0, match;
+  while ((match = open.exec(text))) {
+    visible.push(text.slice(cursor, match.index));
+    const bodyStart = open.lastIndex;
+    close.lastIndex = bodyStart;
+    const end = close.exec(text);
+    sibling.lastIndex = bodyStart;
+    const next = end ? null : sibling.exec(text);
+    const bodyEnd = end ? end.index : next ? next.index : text.length;
+    const body = text.slice(bodyStart, bodyEnd).trim();
+    if (body) plans.push(body);
+    cursor = end ? close.lastIndex : bodyEnd;
+    open.lastIndex = cursor;
+  }
+  visible.push(text.slice(cursor));
+  const plan = plans.join('\n');
+  const junk = /^(none|无|暂无|继续观察|再看看|观察局势|保持潜伏|继续潜伏|看情况|随机应变|见机行事|正常发言|继续|等待|待定|tbd|n\/a)[。.\s]*$/i;
+  return {visible:visible.join('\n').trim(), plan:plan.length >= 8 && !junk.test(plan) ? plan : ''};
 }
 
 // ★ 从 thinking 抢救发言：当 AI 不按格式输出，把发言写到 thinking 里时使用。
@@ -11841,6 +11866,11 @@ async function mcReviewSpeech(player, result, promptFn) {
 }
 
 async function streamSpeak(player, label, result, isWolfChat, noUndo) {
+  // Manual/director input can bypass parseAI. Protect shared history and TTS too.
+  const privateParts = splitPrivatePlanBlocks(result.game);
+  result.game = privateParts.visible;
+  if (!result.plan) result.plan = privateParts.plan;
+  result.action = splitPrivatePlanBlocks(result.action).visible;
   if (blindNamesOn() && result) {
     result = {
       ...result,
@@ -12479,7 +12509,7 @@ async function mcProcDay(players, promptFn, label) {
         // ★ 白狼王自爆：玩家输入可能是 "<game>...</game><action>EXPLODE:xxx</action>" 组合格式
         //   若检测到标签，走parseAI解析；否则保留原行为（裸文字同时当发言和行动）
         const r = (sp && /<(?:game|action)>/i.test(sp))
-          ? (() => { const p2 = parseAI(sp); return {thinking: p2.thinking||'', game: p2.game||'', action: p2.action||''}; })()
+          ? (() => { const p2 = parseAI(sp); return {thinking: p2.thinking||'', game: p2.game||'', action: p2.action||'', plan: p2.plan||''}; })()
           : {thinking: ($('pi-think') && S.directorMode ? ($('pi-think').value||'').trim() : ''), game:sp, action:sp};
         Render.setSpeaking(p.id, true);
         Audio.playCharBgm(p.name);
@@ -13032,14 +13062,14 @@ async function proc(players, promptFn, label, opts) {
           } else {
             // ★ 白狼王自爆：玩家输入可能带 <game>/<action> 标签
             results[j] = (sp && /<(?:game|action)>/i.test(sp))
-              ? (() => { const p2 = parseAI(sp); return {thinking: p2.thinking||'', game: p2.game||'', action: p2.action||''}; })()
+              ? (() => { const p2 = parseAI(sp); return {thinking: p2.thinking||'', game: p2.game||'', action: p2.action||'', plan: p2.plan||''}; })()
               : {thinking:'', game:sp, action:sp};
           }
         } else {
           const sp = await waitInput(promptFn(p), p.role.name, p);
           // ★ 白狼王自爆：玩家输入可能带 <game>/<action> 标签
           results[j] = (sp && /<(?:game|action)>/i.test(sp))
-            ? (() => { const p2 = parseAI(sp); return {thinking: p2.thinking||'', game: p2.game||'', action: p2.action||''}; })()
+            ? (() => { const p2 = parseAI(sp); return {thinking: p2.thinking||'', game: p2.game||'', action: p2.action||'', plan: p2.plan||''}; })()
             : {thinking:'',game:sp,action:sp};
         }
       }
@@ -14164,7 +14194,7 @@ async function procWolf(wolves, promptFn, label, opts) {
       }
       // ★ 白狼王自爆：玩家输入可能带 <game>/<action> 标签
       results[j] = (sp && /<(?:game|action)>/i.test(sp))
-        ? (() => { const p2 = parseAI(sp); return {thinking: p2.thinking||'', game: p2.game||'', action: p2.action||''}; })()
+        ? (() => { const p2 = parseAI(sp); return {thinking: p2.thinking||'', game: p2.game||'', action: p2.action||'', plan: p2.plan||''}; })()
         : {thinking:'', game:sp, action:sp};
       const r = results[j];
       if (r.game) {
@@ -28076,8 +28106,9 @@ buildWebPrompt = function(p) {
 
 // 把网页 AI 的草稿与最终答案硬隔离；草稿保存为私密 thinking，不参与行动识别。
 function _splitWebReplyDraft(rawText) {
-  const raw = String(rawText || '').trim();
-  if (!raw) return {thinking:'', visible:''};
+  const privateParts = splitPrivatePlanBlocks(rawText);
+  const raw = privateParts.visible;
+  if (!raw) return {thinking:'', visible:'', plan:privateParts.plan};
   let visible = raw;
   const thoughts = [];
   const blocks = [
@@ -28091,11 +28122,11 @@ function _splitWebReplyDraft(rawText) {
       return '\n';
     });
   });
-  return {thinking:thoughts.join('\n'), visible:visible.replace(/\n{3,}/g,'\n\n').trim()};
+  return {thinking:thoughts.join('\n'), visible:visible.replace(/\n{3,}/g,'\n\n').trim(), plan:privateParts.plan};
 }
 
 function _lastTaggedWebAction(rawText) {
-  const hits = [...String(rawText || '').matchAll(/<\s*action\s*>([\s\S]*?)<\s*\/\s*action\s*>/gi)];
+  const hits = [...splitPrivatePlanBlocks(rawText).visible.matchAll(/<\s*action\s*>([\s\S]*?)<\s*\/\s*action\s*>/gi)];
   return hits.length ? String(hits[hits.length - 1][1] || '').trim() : '';
 }
 
@@ -28106,6 +28137,7 @@ function parseWebPaste(rawText) {
   let text = replyParts.visible;
   const _webThinking = replyParts.thinking;
   const _webAction = _lastTaggedWebAction(rawText);
+  const planTag = replyParts.plan ? '<plan>' + replyParts.plan + '</plan>' : '';
 
   // 2. 去掉常见助手前缀（网页端Claude/GPT很爱加这些）
   const prefixes = [
@@ -28136,17 +28168,17 @@ function parseWebPaste(rawText) {
     const gm = parsed.game || text;
     const action = parsed.action || _webAction;
     const actionTag = action ? '<action>' + action + '</action>' : '';
-    if (thk && thk.trim()) return '<thinking>' + thk.trim() + '</thinking><game>' + gm + '</game>' + actionTag;
-    return action ? '<game>' + gm + '</game>' + actionTag : gm;
+    if (thk && thk.trim()) return '<thinking>' + thk.trim() + '</thinking><game>' + gm + '</game>' + actionTag + planTag;
+    return action || planTag ? '<game>' + gm + '</game>' + actionTag + planTag : gm;
   }
 
   // 5. 去掉多余空行
   text = text.replace(/\n{3,}/g, '\n\n').trim();
   // 若提取到草稿/思考，用<thinking>标签包回，使其能存入导出记录的内心独白
   if (_webThinking && _webThinking.trim()) {
-    return '<thinking>' + _webThinking.trim() + '</thinking><game>' + text + '</game>' + (_webAction ? '<action>' + _webAction + '</action>' : '');
+    return '<thinking>' + _webThinking.trim() + '</thinking><game>' + text + '</game>' + (_webAction ? '<action>' + _webAction + '</action>' : '') + planTag;
   }
-  return text;
+  return planTag ? '<game>' + text + '</game>' + planTag : text;
 }
 
 // ── 导演模式状态横幅：显示在日志顶部固定位置 ──

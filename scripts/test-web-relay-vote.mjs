@@ -10,7 +10,10 @@ const parserStart = html.indexOf('function _parseWebVotePaste(rawText, candidate
 const parserEnd = html.indexOf('// ── 网页端 prompt 弹窗', parserStart);
 assert.ok(helperStart >= 0 && helperEnd > helperStart && pasteStart >= 0 && pasteEnd > pasteStart && parserStart >= 0 && parserEnd > parserStart, 'web relay vote parser is missing');
 
-const source = html.slice(helperStart, helperEnd) + '\n' + html.slice(pasteStart, pasteEnd) + '\n' + html.slice(parserStart, parserEnd);
+const planStart = html.indexOf('function splitPrivatePlanBlocks(rawText)');
+const planEnd = html.indexOf('// ★ 从 thinking 抢救发言', planStart);
+assert.ok(planStart >= 0 && planEnd > planStart, 'private plan splitter is missing');
+const source = html.slice(planStart, planEnd) + '\n' + html.slice(helperStart, helperEnd) + '\n' + html.slice(pasteStart, pasteEnd) + '\n' + html.slice(parserStart, parserEnd);
 const parseAI = text => ({action:(text.match(/<action>([\s\S]*?)<\/action>/i)||[])[1] || ''});
 const findPlayer = (text, candidates) => {
   const value = String(text || '').trim();
