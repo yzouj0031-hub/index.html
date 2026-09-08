@@ -941,6 +941,17 @@ body.blind-review .le.ending { display:none !important; }
   margin-bottom: 16px; padding-bottom: 10px;
   border-bottom: 1px solid rgba(200,48,64,0.3);
 }
+.wolf-pact-log > summary {
+  cursor: pointer; color: var(--cinnabar-light); font-weight: 700;
+  line-height: 1.55; list-style-position: outside;
+}
+.wolf-pact-log[open] > summary { margin-bottom: 7px; }
+.wolf-pact-log-body {
+  padding: 8px 10px; color: #d8c8d0; line-height: 1.65;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  background: rgba(200,48,64,0.07); border-left: 2px solid rgba(200,48,64,0.35);
+  border-radius: 0 var(--r) var(--r) 0;
+}
 .ws-item {
   display: flex; align-items: flex-start; gap: 10px;
   padding: 12px; margin-bottom: 10px;
@@ -4808,7 +4819,8 @@ function seerSeesAsWolf(target) {
 ALL_ROLES.magician.guide = ALL_ROLES.magician.guide.replace(
   '想不清楚就空过——空过是完全合理的选择，乱换比不换更糟。',
   '交换和空过都不是默认答案：交换能主动改变落点、命中时收益极高，但也可能误伤；空过能避免误换，但会放弃本夜改变刀口的机会。有具体刀口判断和可接受的转移对象时可以果断交换，证据不足时可以空过。'
-);
+) + '\n\n【公开换位记录：保密也是技能价值】内部必须保存真实交换账本，但白天不要求为了证明自己就立刻报出交换对象。精确换位会帮助狼人反推真实刀口、保护空档和你的身份；没有需要解释的异常死讯、关键对跳或致命误票时，可以继续隐藏、暂缓披露或只报必要部分。若决定使用合法假口径诱导狼刀，必须计算误导好人和后续自证成本，不能把假记录当成真实行动。不要因为“我有信息”就自动跳身份，更不要用只有魔术师才知道的口吻半跳泄密。';
+ALL_ROLES.fool.guide += '\n\n【公开护盾记录：不要机械自曝】护盾目标、是否仍有保命次数都属于你的内部真账本，不要求白天主动交给全场。公开精确目标或剩余技能会帮助狼人判断该刀谁、该绕开谁；仅在需要解决关键对跳、解释公开结算、阻止致命误票或主动设计骗刀时披露。可以隐藏、部分披露或使用符合规则的战术口径，但不得改写内部真记录，也要计算误导好人和被票出的代价。自报身份、喊“我今晚能自保”并不自动产生收益。';
 ALL_ROLES.guard.guide = ALL_ROLES.guard.guide.replace(
   '首夜信息为零、女巫首夜不一定用救药、谁被刀全靠猜——这种情况下"空守"或"守自己"都是完全合理的选择，不是"失职"、不是"什么都没做"。',
   '首夜信息有限，但守人、守自己和空守都可能合理；信息少不能单独推出任何一个默认答案。'
@@ -14588,6 +14600,15 @@ Render.showWolfStrategyResult = function(stratList, votes, winner) {
   $('wsOverlay').classList.add('show');
 };
 
+// 弹窗会自动关闭；把完整提案与最终密约同时留在观战日志中，避免只能看到 60/80 字摘要。
+// scope=pack：上帝视角可见；跟随单个 AI 视角时仅狼队成员可见。
+function logWolfStrategyEntry(label, name, content, open) {
+  const details = '<details class="wolf-pact-log"' + (open ? ' open' : '') + '>' +
+    '<summary>' + escapeHtml(label + '：「' + name + '」') + '</summary>' +
+    '<div class="wolf-pact-log-body">' + escapeHtml(content) + '</div></details>';
+  Render.log('night-detail', details, {scope:'pack'});
+}
+
 // 主流程：独立提案 → 投票 → 出结果
 async function wolfStrategyDiscuss(wolves) {
   if (!wolves || wolves.length <= 1) {
@@ -14816,7 +14837,7 @@ async function wolfStrategyDiscuss(wolves) {
 
     if (sn && sc && sc.length >= 10) {
       stratList.push({name: sn, content: sc, proposer: w.name, proposerId: w.id});
-      Render.log('night-detail', '🐺 ' + w.name + ' 提议:「' + sn + '」— ' + sc.slice(0, 60) + (sc.length > 60 ? '…' : ''));
+      logWolfStrategyEntry('🐺 ' + w.name + ' 提议', sn, sc, false);
     } else {
       // 提案解析失败时记录原始内容，方便 debug
       Render.devLog && Render.devLog('warn', `[狼盟密约] ${w.name} 提案解析失败 (strategy="${(r.strategy||'').slice(0,80)}", game="${(r.game||'').slice(0,80)}")`);
@@ -14840,7 +14861,7 @@ async function wolfStrategyDiscuss(wolves) {
     const singleVotes = {};
     singleVotes[stratList[0].name] = aliveWolves.map(w => w.name);
     Render.showWolfStrategyResult(stratList, singleVotes, stratList[0]);
-    Render.log('night-detail', '🐺 定策：「' + S.wolfStrategyName + '」');
+    logWolfStrategyEntry('🐺 最终定策', S.wolfStrategyName, S.wolfStrategy, true);
     aliveWolves.forEach(w => w.memory.push({
       role: 'system',
       content: '【狼队策略·已定】「' + S.wolfStrategyName + '」：' + S.wolfStrategy
@@ -14983,7 +15004,7 @@ async function wolfStrategyDiscuss(wolves) {
   // 渲染弹窗
   Render.showWolfStrategyResult(stratList, votes, winner);
   Render.log('night-detail', '🐺 投票结果：' + Object.keys(votes).map(n => '「' + n + '」' + votes[n].length + '票').join('、'));
-  Render.log('night-detail', '🐺 定策：「' + S.wolfStrategyName + '」— ' + S.wolfStrategy.slice(0, 80) + (S.wolfStrategy.length > 80 ? '…' : ''));
+  logWolfStrategyEntry('🐺 最终定策', S.wolfStrategyName, S.wolfStrategy, true);
 
   // 把胜出策略写入所有狼人的 memory（影响后续白天发言/夜晚决策）
   aliveWolves.forEach(w => w.memory.push({
@@ -19771,7 +19792,7 @@ const PhaseHandlers = {
       //   不会直接入夜，发言面板还停在第二轮。
       result = await mcProcDay(speakOrder, p => _r1Lead+buildSpeakOrderFact(p)+duelPendingNote+'\n【重要】<game>标签里必须写完整的正式发言，直接开口说话，不能写过渡语或草稿。不得少于80字。', S.singleRound ? '发言' : '第一轮') || null;
     } else {
-      result = await proc(speakOrder, p => _r1Lead+buildSpeakOrderFact(p)+duelPendingNote+'\n【重要】<game>标签里必须写完整的正式发言，直接开口说话，不能写"好，开始写"或任何过渡语草稿。发言必须包含：你对当前局势的判断、至少一个具体怀疑对象和理由。隐藏身份的神职，理由只能来自台面上人人可见的信息；要么完整跳身份报记录，要么完全不暗示，没有中间状态。不得少于80字。', '发言');
+      result = await proc(speakOrder, p => _r1Lead+buildSpeakOrderFact(p)+duelPendingNote+'\n【重要】<game>标签里必须写完整的正式发言，直接开口说话，不能写"好，开始写"或任何过渡语草稿。发言必须包含：你对当前局势的判断、至少一个具体怀疑对象和理由。隐藏身份的神职，理由只能来自台面上人人可见的信息，不得无意识半跳泄露私密视角；若有明确战术，也可以暂缓、部分披露或使用符合规则的公开假口径，不必机械交出全部真记录。无论公开怎么说，内部真账本不得改写，并要计算误导好人、暴露保护空档和后续对跳成本。不得少于80字。', '发言');
     }
     if (result && result.startsWith('trial:') && result !== 'trial:tie') {
       if (!await checkEnd()) {
