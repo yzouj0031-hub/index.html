@@ -34,6 +34,33 @@ for (const file of clients) {
   expect(magicianSteps.every((position, index) => position < wolfKillSteps[index]), `${file}: magician must act before wolf attack`);
   expect(src.includes('魔术师在狼刀确定前行动') || src.includes('每晚【在狼刀确定前】行动'), `${file}: magician timing wording not updated`);
   expect(!src.includes('魔术师最先行动') && !src.includes('每晚最先行动') && !src.includes('每晚【最先】行动'), `${file}: stale absolute-first magician wording`);
+  expect(src.includes('function publicConfiguredRoleStatus(roleId)'), `${file}: missing public-information role status helper`);
+  expect(src.includes("if (hiddenDeaths && anyoneOut) return 'unknown'"), `${file}: hidden deaths still expose configured role survival`);
+  const statusStart = src.indexOf('function publicConfiguredRoleStatus(roleId)');
+  const statusEnd = src.indexOf('\n}', statusStart);
+  if (statusStart >= 0 && statusEnd > statusStart) {
+    const statusSource = src.slice(statusStart, statusEnd + 2);
+    const statusFor = new Function('S', 'document', `${statusSource}; return publicConfiguredRoleStatus;`);
+    const roster = [
+      {alive:true, role:{id:'magician'}},
+      {alive:false, role:{id:'villager'}}
+    ];
+    expect(statusFor({players:roster}, {getElementById:()=>({checked:true})})('magician') === 'unknown', `${file}: hidden death leaks that Magician is actually alive`);
+    expect(statusFor({players:roster}, {getElementById:()=>({checked:false})})('magician') === 'alive', `${file}: public death mode cannot retain publicly-known Magician survival`);
+    roster[0].alive = false;
+    expect(statusFor({players:roster}, {getElementById:()=>({checked:true})})('magician') === 'unknown', `${file}: hidden death leaks that Magician is actually out`);
+    expect(statusFor({players:roster}, {getElementById:()=>({checked:false})})('magician') === 'out', `${file}: public death mode cannot suppress an openly dead Magician hint`);
+  }
+  expect(!src.includes('WB_MOSHU_WOLF'), `${file}: global wolf worldbook still repeatedly injects Magician strategy`);
+  expect(!src.includes('const livingMagician = S.players.some'), `${file}: wolf kill prompt still reads the hidden Magician survival state`);
+  expect(!src.includes('const _magicianAlive'), `${file}: worldbook still reads the hidden Magician survival state`);
+  expect(!src.includes('【🎩 魔术师仍存活') && !src.includes('\n魔术师仍存活，狼刀可能被换位') && !src.includes('🎩 魔术师仍存活，这把刀可能被交换重定向'), `${file}: player prompt still asserts hidden Magician survival as fact`);
+  expect(src.includes('魔术师换位·这是概率分支，不是后台存活情报'), `${file}: wolf prompt does not label Magician survival as uncertain evidence`);
+  expect(src.includes('D可以是任意合法目标，包括你自己或已知狼队友'), `${file}: anti-swap self/pack sacrifice outcome is not explicit`);
+  expect(src.includes('const pactTargetCandidates = (viewer, english) => S.players') && src.includes('.filter(x => x.alive)'), `${file}: pact proposals do not receive all living legal nominal targets`);
+  expect(!src.includes(".filter(x => x.alive && x.role.team !== 'bad')"), `${file}: pact target list still filters by hidden backend alignment`);
+  expect(src.includes("const knownPackIds = new Set(aliveWolves.map(w => w.id))"), `${file}: pact target labels lack viewer-known pack membership`);
+  expect(!src.includes('aliveStrongShen'), `${file}: civilian guidance still depends on hidden strong-role survival`);
   expect(src.includes("p.role.id!=='mechwolf' && p.role.id!=='gargoyle'"), `${file}: pack must exclude isolated wolves`);
   expect(src.includes("role.id !== 'mechwolf' && role.id !== 'gargoyle'"), `${file}: shared wolf vision must exclude isolated wolves`);
   const packLabelStart = src.indexOf('const knownPackIds = new Set(ws.map(w => w.id))');

@@ -12,6 +12,8 @@ for (const file of ['index.html', 'en/index.html']) {
   expect(src.includes('神职公开声称的行动记录'), `${file}: claimed records are still treated as automatic facts`);
   expect(src.includes('不能因为“真神就该如实报”而自动采信'), `${file}: public god claims are automatically trusted`);
   expect(src.includes('【公开守护记录：真账本与公开口径分离】'), `${file}: guard guide lacks the scoped deception rule`);
+  expect(src.includes('【公开换位记录：保密也是技能价值】'), `${file}: magician guide still encourages automatic disclosure`);
+  expect(src.includes('【公开护盾记录：不要机械自曝】'), `${file}: fool guide still encourages automatic disclosure`);
   expect(src.includes('公开说法不只会骗狼，也会被女巫和其他好人听到'), `${file}: guard deception ignores friendly-information cost`);
   expect(src.includes('不要编造系统反馈，也不要把推测说成守中事实'), `${file}: guard may fabricate system feedback`);
   expect(src.includes('【跳与藏·按收益决定，避免无计划半跳】'), `${file}: runtime witch guide retains an unconditional disclosure rule`);
@@ -20,6 +22,10 @@ for (const file of ['index.html', 'en/index.html']) {
   expect(!src.includes('每次跳身份都必须完整报出'), `${file}: seer record block still forces full disclosure`);
   expect(!src.includes('跳身份时必须如实报告'), `${file}: seer result memory still forces truthful disclosure`);
   expect(!src.includes('如果你这轮决定公开身份，就把记录报完整'), `${file}: day-phase prompt still forces full disclosure`);
+  expect(!src.includes('要么完整跳身份报记录，要么完全不暗示'), `${file}: first-round prompt still forces all-or-nothing disclosure`);
+  expect(src.includes('function logWolfStrategyEntry(label, name, content, open)'), `${file}: full pact log helper is missing`);
+  expect(src.includes("logWolfStrategyEntry('🐺 最终定策', S.wolfStrategyName, S.wolfStrategy, true)"), `${file}: final pact is still truncated in spectator logs`);
+  expect(!src.includes('S.wolfStrategy.slice(0, 80)'), `${file}: final pact spectator log still truncates content`);
 
   const rawGuardMatch = src.match(/reg\(\{id:'guard',[^\n]*guide:'((?:\\.|[^'])*)'\+N1\}\);/);
   expect(Boolean(rawGuardMatch), `${file}: raw guard guide could not be inspected`);

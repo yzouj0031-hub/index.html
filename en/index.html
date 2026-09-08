@@ -941,6 +941,17 @@ body.blind-review .le.ending { display:none !important; }
   margin-bottom: 16px; padding-bottom: 10px;
   border-bottom: 1px solid rgba(200,48,64,0.3);
 }
+.wolf-pact-log > summary {
+  cursor: pointer; color: var(--cinnabar-light); font-weight: 700;
+  line-height: 1.55; list-style-position: outside;
+}
+.wolf-pact-log[open] > summary { margin-bottom: 7px; }
+.wolf-pact-log-body {
+  padding: 8px 10px; color: #d8c8d0; line-height: 1.65;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  background: rgba(200,48,64,0.07); border-left: 2px solid rgba(200,48,64,0.35);
+  border-radius: 0 var(--r) var(--r) 0;
+}
 .ws-item {
   display: flex; align-items: flex-start; gap: 10px;
   padding: 12px; margin-bottom: 10px;
@@ -4002,17 +4013,17 @@ const WB_RULE_CLARIFY = '\n\n【本局规则·明确定义(避免按其他板规
 
 
 
-// ─── 条件注入①：本局有【魔术师】时，给会刀人的明狼——提醒"刀会被移走"+落点诡异=抓魔术师 ───
-//  只在魔术师【存活】时注入(死人不能交换)，且不给机械狼(它带刀在残局、届时魔术师多半已死)。
-const WB_MOSHU_WOLF = `
-
-【⚠️ 本局有魔术师——你的刀会被"重定向"，刀谁死谁不再由你说了算】本局配置里有魔术师（好人神职，每晚在狼刀确定前行动）。魔术师能把两名玩家的号码对调，效果是【只改你这一刀的落点】：你和队友定了刀A，若魔术师这一晚把A和B对调，实际死的是B、A毫发无损。你在夜里【完全不知道】刀被换了，要到第二天公布死讯才可能看出不对劲。守卫是"挡刀"（被守的人不死、出平安夜），魔术师是"移刀"（刀照样见血，只是见的是另一个人的血）——两者要分清。
-· **对你选刀的直接影响**：你以为"刀死了真预言家"未必成真——预言家可能被换到别处、真正死的是个边缘好人。所以别把"我昨晚刀了X"直接等同于"X已经死了"，一切以死讯公告为准，再回头对照。
-· **⚠️ 刀口"落点诡异"是魔术师暴露的铁信号，反过来是你的抓神工具**：如果某晚你们明明集火刀了A，结果A活着、却死了一个你们根本没碰过的B——在排除其他解释后（守卫只会让人不死、不会让别人替死；女巫只救人不换人），这几乎必然是【魔术师把刀移走了】。一旦你从死讯里推断出场上有魔术师在活跃，你就多了一个高价值目标：**魔术师本身值得优先刀掉**——他一死，你的刀就恢复"指哪打哪"，不再被人暗中转移。
-· **选刀时必须区分“真正想杀的人”和“实际下刀的位置”**：先定最终想让谁出局（记作V），再预测魔术师最可能拿谁（记作D）和V交换。若你判断魔术师大概率换V↔D，那么直接刀V只会落到D；反过来刀D，交换后才会落回真正想杀的V。这不是固定公式，而是要比较两条路线：①直刀V：不交换时杀V、交换时杀D；②反刀D：不交换时杀D、交换时杀V。结合V与D各自价值、魔术师这么换的概率、守卫/女巫保护概率，选【预期收益】更高的名义刀口。
-· **不要把“选一个神职”当作完成决策**：你必须在 thinking 里至少比较“直刀目标”和“一条反向落点路线”，写清【名义刀口→若交换后的实际落点】。能高置信预判对方换位时，可以故意刀交换对象来穿过换位；证据不足时别为了秀操作乱反刀，改用直刀或选一个即使没交换也不亏的双高价值组合。
-· **这是双向博弈，不要永远只算一层**：魔术师也会猜到狼人可能反刀D，所以要看其历史风格、公开发言、上一夜落点与“不能连续两晚重复同一对”的限制，判断对方今晚更可能保护、反保护还是空过。必要时换一条不那么显眼的路线，或优先处理疑似魔术师本人，让后续刀口恢复稳定。
-· 但别草木皆兵：不是每个平安夜、每个意外死亡都是魔术师干的（也可能守卫守了、女巫救了、或你们本来刀的就是那个人）。把"魔术师移刀"当成【一种要纳入计算的可能】，在 thinking 里结合守卫/女巫是否可能作用、死的到底是谁，掂量这一晚的死讯究竟怎么回事，别无脑归因。`;
+// 角色是否仍可行动，只能按玩家视角下的公开信息判断。
+// 配置本身公开；公开死亡局可由翻牌判断，隐死亡局一旦有人出局就只能返回 unknown。
+// 禁止调用方根据后台真实存活角色决定是否给 AI 注入提示，否则提示是否出现本身就在泄密。
+function publicConfiguredRoleStatus(roleId) {
+  const configured = (S && S.players || []).filter(pl => pl.role && pl.role.id === roleId);
+  if (!configured.length) return 'absent';
+  const hiddenDeaths = !!(typeof document !== 'undefined' && document.getElementById('m-hdeath') && document.getElementById('m-hdeath').checked);
+  const anyoneOut = (S.players || []).some(pl => !pl.alive);
+  if (hiddenDeaths && anyoneOut) return 'unknown';
+  return configured.some(pl => pl.alive) ? 'alive' : 'out';
+}
 
 // ─── 条件注入②：本局有【魔术师】时，给"从外部读死讯"的人(所有好人 + 带刀前的机械狼)——把"移刀"当正当解释 ───
 const WB_MOSHU_GOOD = `
@@ -4363,10 +4374,6 @@ function buildWorldBook(p) {
     if (p && p.role && p.role.team === 'good' &&
         ['villager', 'hunter', 'knight'].includes(p.role.id) &&
         S.players && S.history) {
-      const strongRoles = ['seer', 'witch', 'guard'];
-      const aliveStrongShen = S.players.some(pl =>
-        pl.alive && pl.role && strongRoles.includes(pl.role.id)
-      );
       // "神职被攻击"信号:历史里有人说"投/推/锁/出"+ 已亮身份的神职名字
       const claimedShenNames = new Set();
       S.history.forEach(h => {
@@ -4388,7 +4395,8 @@ function buildWorldBook(p) {
           if (hits >= 2) { shenUnderAttack = true; break; }
         }
       }
-      if (aliveStrongShen && shenUnderAttack) {
+      // 只按公开发言中的神职声明和围攻信号触发；不能用后台真实神职是否存活来决定是否注入。
+      if (shenUnderAttack) {
         wb += WB_PINGMIN_DANGDAO;
       }
     }
@@ -4435,23 +4443,16 @@ function buildWorldBook(p) {
     }
 
     // ─── 新增 ⑥ 本局有【魔术师】时的专项提示（只在配置了魔术师时注入，避免污染没有魔术师的局）────
-    //  · 明狼(会刀人的)：提醒刀会被"移刀"重定向 + 落点诡异=抓魔术师信号。仅魔术师【存活】时注入(死人不能交换)。
+    //  · 狼队的详细换位计算只在夜刀阶段按公开可知状态注入，避免每个阶段重复灌输或泄露真实存活状态。
     //  · "从外部读死讯"的人(所有好人 + 带刀前的机械狼)：把"魔术师移刀"当成复盘死讯的一种正当解释。
     //  · 魔术师本人：加入狼人会反刀交换对象的二阶推演。
-    const _magicianInGame = S.players && S.players.some(pl => pl.role && pl.role.id === 'magician');
-    const _magicianAlive  = S.players && S.players.some(pl => pl.role && pl.role.id === 'magician' && pl.alive);
-    const _mechHasKnife = p && p.role && p.role.id === 'mechwolf' &&
-      S.players && !S.players.some(pl => pl.alive && pl.role && pl.role.team === 'bad' && pl.role.id !== 'mechwolf');
+    const _magicianInGame = publicConfiguredRoleStatus('magician') !== 'absent';
     const _mechHasMagicIntel = p && p.role && p.role.id === 'mechwolf' &&
       S.mechLearn && S.mechLearn.learned && (S.mechLearn.skill || mechSkillOf(S.mechLearn.role)) === 'magician' && S.mechLearn.learnRound < S.round;
     if (p && p.role && _magicianInGame) {
       // 魔术师本人：反推狼队会预判交换，做二阶落点博弈。
-      if (p.role.id === 'magician' && _magicianAlive) {
+      if (p.role.id === 'magician' && p.alive !== false) {
         wb += WB_MOSHU_SELF;
-      }
-      // 会刀人的明狼(排除机械狼——它带刀在残局、届时魔术师多半已死)：魔术师活着才提醒移刀
-      else if (p.role.team === 'bad' && _magicianAlive && (p.role.id !== 'mechwolf' || _mechHasKnife) && !_mechHasMagicIntel) {
-        wb += WB_MOSHU_WOLF;
       }
       // 好人 + 带刀前的机械狼(信息量同好人、也在"从外部读死讯")：给复盘死讯的解释工具
       else if (p.role.team === 'good' || (p.role.id === 'mechwolf' && !_mechHasMagicIntel)) {
@@ -4714,7 +4715,8 @@ function seerSeesAsWolf(target) {
 ALL_ROLES.magician.guide = ALL_ROLES.magician.guide.replace(
   '想不清楚就空过——空过是完全合理的选择，乱换比不换更糟。',
   '交换和空过都不是默认答案：交换能主动改变落点、命中时收益极高，但也可能误伤；空过能避免误换，但会放弃本夜改变刀口的机会。有具体刀口判断和可接受的转移对象时可以果断交换，证据不足时可以空过。'
-);
+) + '\n\n【公开换位记录：保密也是技能价值】内部必须保存真实交换账本，但白天不要求为了证明自己就立刻报出交换对象。精确换位会帮助狼人反推真实刀口、保护空档和你的身份；没有需要解释的异常死讯、关键对跳或致命误票时，可以继续隐藏、暂缓披露或只报必要部分。若决定使用合法假口径诱导狼刀，必须计算误导好人和后续自证成本，不能把假记录当成真实行动。不要因为“我有信息”就自动跳身份，更不要用只有魔术师才知道的口吻半跳泄密。';
+ALL_ROLES.fool.guide += '\n\n【公开护盾记录：不要机械自曝】护盾目标、是否仍有保命次数都属于你的内部真账本，不要求白天主动交给全场。公开精确目标或剩余技能会帮助狼人判断该刀谁、该绕开谁；仅在需要解决关键对跳、解释公开结算、阻止致命误票或主动设计骗刀时披露。可以隐藏、部分披露或使用符合规则的战术口径，但不得改写内部真记录，也要计算误导好人和被票出的代价。自报身份、喊“我今晚能自保”并不自动产生收益。';
 ALL_ROLES.guard.guide = ALL_ROLES.guard.guide.replace(
   '首夜信息为零、女巫首夜不一定用救药、谁被刀全靠猜——这种情况下"空守"或"守自己"都是完全合理的选择，不是"失职"、不是"什么都没做"。',
   '首夜信息有限，但守人、守自己和空守都可能合理；信息少不能单独推出任何一个默认答案。'
@@ -13396,6 +13398,15 @@ Render.showWolfStrategyResult = function(stratList, votes, winner) {
   $('wsOverlay').classList.add('show');
 };
 
+// 弹窗会自动关闭；把完整提案与最终密约同时留在观战日志中，避免只能看到 60/80 字摘要。
+// scope=pack：上帝视角可见；跟随单个 AI 视角时仅狼队成员可见。
+function logWolfStrategyEntry(label, name, content, open) {
+  const details = '<details class="wolf-pact-log"' + (open ? ' open' : '') + '>' +
+    '<summary>' + escapeHtml(label + '：「' + name + '」') + '</summary>' +
+    '<div class="wolf-pact-log-body">' + escapeHtml(content) + '</div></details>';
+  Render.log('night-detail', details, {scope:'pack'});
+}
+
 // 主流程：独立提案 → 投票 → 出结果
 async function wolfStrategyDiscuss(wolves) {
   if (!wolves || wolves.length <= 1) {
@@ -13407,9 +13418,17 @@ async function wolfStrategyDiscuss(wolves) {
   // ── 第一步：每个狼人独立提案（不互相看）──
   const proposals = {};
   const aliveWolves = wolves.filter(w => w.alive !== false);
-  const targetCandidates = S.players
-    .filter(x => x.alive && x.role.team !== 'bad')
-    .map(x => x.name + '(P' + (x.id+1) + ')').join('、');
+  const knownPackIds = new Set(aliveWolves.map(w => w.id));
+  const pactTargetCandidates = (viewer, english) => S.players
+    .filter(x => x.alive)
+    .map(x => {
+      const packTag = knownPackIds.has(x.id)
+        ? (x.id === viewer.id
+          ? (english ? ' [self; tactical self-kill]' : '（你自己，可战术自刀）')
+          : (english ? ' [known packmate; tactical sacrifice]' : '（已知狼队友，可战术刀）'))
+        : '';
+      return x.name + '(P' + (x.id+1) + ')' + packTag;
+    }).join(english ? ', ' : '、');
 
   // 并发调用所有狼 AI（最多并发 3 个，防止 rate limit）
   // ★ 本局有机械狼时，密约里额外注入"机械狼是队友"的禁令（防止方案里出现"找出机械狼刀掉"）
@@ -13419,7 +13438,8 @@ async function wolfStrategyDiscuss(wolves) {
     : '';
   const proposalPrompt = (w) => {
     const mates = aliveWolves.filter(x => x.id !== w.id).map(x => x.name + '(' + x.role.name + ')').join('、');
-    return '【狼盟密约·独立提案】\n你是狼队一员，要提出一个完整的本局战术方案。其他队友也在同时独立提出，互相不知道对方写了什么——所以你要写出最有你个人风格的方案，不要复读什么"优先刀预言家"。\n\n队友：' + mates + '\n潜在刀口（存活的好人/第三方）：' + targetCandidates + mechPactNote + '\n\n【方案要求】\n· 给方案起一个独特的名字（4-8字，比如「明暗双线」「深海潜航」「核爆带歪」）\n· 内容要包含：今晚刀谁、白天怎么打（谁悍跳/谁潜水/谁做对子）、为什么\n· 100-200 字，紧凑、不要凑字数\n· 必须基于本局具体号位/玩家来想，不是套模板\n\n【⚠️ 输出格式 - 必须严格遵守，否则方案会被丢弃】\n你必须严格按照以下格式输出，<strategy> 标签里的"方案名|方案内容"格式不能省略：\n<thinking>简短思考</thinking>\n<strategy>方案名|方案详细内容</strategy>\n<game>对队友简短说明你的方案（一两句话）</game>\n<action>None</action>\n\n例如：\n<strategy>明暗双线|让汤姆在前排带节奏装鲁莽好人，吸引神职注意。我和大和保持中立观察，找机会刀神。今晚先刀 P5（首发位最像预言家），明天大和悍跳。</strategy>';
+    const targetCandidates = pactTargetCandidates(w, false);
+    return '【狼盟密约·独立提案】\n你是狼队一员，要提出一个完整的本局战术方案。其他队友也在同时独立提出，互相不知道对方写了什么——所以你要写出最有你个人风格的方案，不要复读什么"优先刀预言家"。\n\n队友：' + mates + '\n可讨论名义刀口（所有存活玩家，含已知狼队成员）：' + targetCandidates + mechPactNote + '\n\n【方案要求】\n· 给方案起一个独特的名字（4-8字，比如「明暗双线」「深海潜航」「核爆带歪」）\n· 内容要包含：今晚刀谁、白天怎么打（谁悍跳/谁潜水/谁做对子）、为什么\n· 100-200 字，紧凑、不要凑字数\n· 必须基于本局具体号位/玩家来想，不是套模板\n\n【⚠️ 输出格式 - 必须严格遵守，否则方案会被丢弃】\n你必须严格按照以下格式输出，<strategy> 标签里的"方案名|方案内容"格式不能省略：\n<thinking>简短思考</thinking>\n<strategy>方案名|方案详细内容</strategy>\n<game>对队友简短说明你的方案（一两句话）</game>\n<action>None</action>\n\n例如：\n<strategy>明暗双线|让汤姆在前排带节奏装鲁莽好人，吸引神职注意。我和大和保持中立观察，找机会刀神。今晚先刀 P5（首发位最像预言家），明天大和悍跳。</strategy>';
   };
 
   // 并发执行提案（整体最长等 90 秒，超时则跳过未完成的）
@@ -13459,13 +13479,13 @@ async function wolfStrategyDiscuss(wolves) {
     const pactEnglish = !!(window.WolfI18n && WolfI18n.isEnglish && WolfI18n.isEnglish());
     const pactRoleName = x => (window.WolfI18n ? WolfI18n.role(x.role.id, x.role).name : x.role.name);
     const mates = aliveWolves.filter(x => x.id !== w.id).map(x => x.name + '(' + pactRoleName(x) + ')').join(pactEnglish ? ', ' : '、');
-    const localizedTargets = S.players.filter(x => x.alive && x.role.team !== 'bad').map(x => x.name + '(P' + (x.id+1) + ')').join(pactEnglish ? ', ' : '、');
+    const localizedTargets = pactTargetCandidates(w, pactEnglish);
     const ctxMsg = pactEnglish
       ? '🐺 Wolf Pact — You are ' + w.name + ' [' + w.role.emoji + ' ' + pactRoleName(w) + ']\n\n'
-        + 'Teammates: ' + mates + '\nPotential night-kill targets: ' + localizedTargets + '\n\n'
+        + 'Teammates: ' + mates + '\nDiscussable nominal kill targets (all living players): ' + localizedTargets + '\n\n'
         + 'Would you like to propose a match-specific wolf strategy?\n(The pack will vote on all independently submitted proposals.)'
       : '🐺 狼盟密约 — 你是 ' + w.name + '【' + w.role.emoji + w.role.name + '】\n\n'
-        + '队友：' + mates + '\n潜在刀口：' + localizedTargets + '\n\n'
+        + '队友：' + mates + '\n可讨论名义刀口（所有存活玩家）：' + localizedTargets + '\n\n'
         + '你要不要为狼队提一个本局战术方案？\n（方案会和队友们各自的提案一起投票，最后选出胜出方案）';
     // ★ 构造"喂给网页端AI"的完整提示词（一键复制用）
     const buildPactWebPrompt = () => {
@@ -13474,7 +13494,7 @@ async function wolfStrategyDiscuss(wolves) {
       const recentHistory = (S.history || []).slice(-30).map(h => h.name + '：' + h.text).join('\n');
       if (pactEnglish) return '[AI WEREWOLF · WOLF PACT PROPOSAL]\n'
         + 'You are playing ' + w.name + ' as ' + pactRoleName(w) + ' on the wolf team. It is night. Every wolf independently proposes a strategy, then the pack votes for one plan to use as its operating guideline.\n\n'
-        + '[WOLF INFORMATION]\nTeammates: ' + mates + '\nPotential night-kill targets (living good/third-party players): ' + localizedTargets + '\n\n'
+        + '[WOLF INFORMATION]\nTeammates: ' + mates + '\nDiscussable nominal kill targets (all living players): ' + localizedTargets + '\n\n'
         + '[TABLE STATE]\nAlive: ' + alive + (dead ? '\nEliminated: ' + dead : '') + '\n\n'
         + '[RECENT SPEECHES]\n' + (recentHistory || '(Night 1: no speeches yet)') + '\n\n'
         + '[PROPOSAL REQUIREMENTS]\n• Give the plan a distinctive 2–5 word English name.\n• State tonight\'s kill target and the daytime plan: who counterclaims, who stays under the radar, who creates an opposing pair, and why.\n• Write 80–160 words based on these specific players and seats; do not use a generic template.\n\n'
@@ -13482,7 +13502,7 @@ async function wolfStrategyDiscuss(wolves) {
         + 'Example: Split Pressure|Attack P5 tonight because their opening position makes a power role plausible. Tomorrow Tom counterclaims Seer while Yamato stays neutral and I quietly build a miselimination on P8.';
       return '【AI狼人杀·狼盟密约提案】\n'
         + '你在一局狼人杀中扮演狼人阵营的玩家「' + w.name + '」（身份：' + w.role.name + '）。现在是夜晚，狼队每人独立提出一个本局战术方案，之后队友投票选出胜出方案作为狼队行动纲领。\n\n'
-        + '【狼队信息】\n队友：' + mates + '\n潜在刀口（存活的好人/第三方）：' + localizedTargets + mechPactNote + '\n\n'
+        + '【狼队信息】\n队友：' + mates + '\n可讨论名义刀口（所有存活玩家）：' + localizedTargets + mechPactNote + '\n\n'
         + '【场上局势】\n存活：' + alive + (dead ? '\n出局：' + dead : '') + '\n\n'
         + '【近期发言】\n' + (recentHistory || '（第一夜，还没有发言）') + '\n\n'
         + '【方案要求】\n· 方案名 4-8 字（比如「明暗双线」「深海潜航」）\n· 内容包含：今晚刀谁、白天怎么打（谁悍跳/谁潜水/谁做对子）、为什么\n· 100-200 字，必须基于本局具体玩家来想，不要套模板\n\n'
@@ -13544,7 +13564,7 @@ async function wolfStrategyDiscuss(wolves) {
         + '【格式建议】方案名（4-8字）|方案内容（今晚刀谁、白天怎么打、为什么）\n'
         + '例：明暗双线|让 P3 前排带节奏装鲁莽好人吸引神职，我和 P7 中立观察找机会刀神，今晚先刀 P5\n\n'
         + '【你这张牌】' + w.role.name + '——队友：' + mates + '\n'
-        + '【潜在刀口】' + targetCandidates + '\n\n'
+        + '【可讨论名义刀口】' + pactTargetCandidates(w, false) + '\n\n'
         + '直接写方案，留空则跳过：';
       const userInput = await waitInput(inputCtx, '🐺 ' + w.name + ' 写方案', w);
       if (userInput && userInput.trim()) {
@@ -13624,7 +13644,7 @@ async function wolfStrategyDiscuss(wolves) {
 
     if (sn && sc && sc.length >= 10) {
       stratList.push({name: sn, content: sc, proposer: w.name, proposerId: w.id});
-      Render.log('night-detail', '🐺 ' + w.name + ' 提议:「' + sn + '」— ' + sc.slice(0, 60) + (sc.length > 60 ? '…' : ''));
+      logWolfStrategyEntry('🐺 ' + w.name + ' 提议', sn, sc, false);
     } else {
       // 提案解析失败时记录原始内容，方便 debug
       Render.devLog && Render.devLog('warn', `[狼盟密约] ${w.name} 提案解析失败 (strategy="${(r.strategy||'').slice(0,80)}", game="${(r.game||'').slice(0,80)}")`);
@@ -13646,7 +13666,7 @@ async function wolfStrategyDiscuss(wolves) {
     const singleVotes = {};
     singleVotes[stratList[0].name] = aliveWolves.map(w => w.name);
     Render.showWolfStrategyResult(stratList, singleVotes, stratList[0]);
-    Render.log('night-detail', '🐺 定策：「' + S.wolfStrategyName + '」');
+    logWolfStrategyEntry('🐺 最终定策', S.wolfStrategyName, S.wolfStrategy, true);
     aliveWolves.forEach(w => w.memory.push({
       role: 'system',
       content: '【狼队策略·已定】「' + S.wolfStrategyName + '」：' + S.wolfStrategy
@@ -13788,7 +13808,7 @@ async function wolfStrategyDiscuss(wolves) {
   // 渲染弹窗
   Render.showWolfStrategyResult(stratList, votes, winner);
   Render.log('night-detail', '🐺 投票结果：' + Object.keys(votes).map(n => '「' + n + '」' + votes[n].length + '票').join('、'));
-  Render.log('night-detail', '🐺 定策：「' + S.wolfStrategyName + '」— ' + S.wolfStrategy.slice(0, 80) + (S.wolfStrategy.length > 80 ? '…' : ''));
+  logWolfStrategyEntry('🐺 最终定策', S.wolfStrategyName, S.wolfStrategy, true);
 
   // 把胜出策略写入所有狼人的 memory（影响后续白天发言/夜晚决策）
   aliveWolves.forEach(w => w.memory.push({
@@ -15752,8 +15772,9 @@ const NightActions = {
       const targetList = ts.map(x => `P${x.id + 1} ${x.name}${x.id===mw.id?'（你自己，可自刀）':''}`).join('、');
       const brkNote = (S.mechLearn && S.mechLearn.learned && S.mechLearn.learnRound < S.round && S.mechLearn.skill==='wolf')
         ? '\n你学过狼系，这一刀是【破盾刀】：无视守卫守护和女巫解药，直接杀死。' : '';
-      const magicNote = S.players.some(x => x.alive && x.role && x.role.id === 'magician')
-        ? '\n\n🎩 魔术师仍存活，这把刀可能被交换重定向。先定真正想杀的V，再预测魔术师最可能拿D与V交换：直刀V在交换时会杀D；反刀D在交换时才会杀回V。至少比较这两条路线，并继续考虑魔术师可能识破反刀、改换第三人或空过。最终 action 填【名义刀口】，不是你口头设想的最终受害者；证据不足时不要随机反刀。'
+      const publicMagicStatus = publicConfiguredRoleStatus('magician');
+      const magicNote = !hasMagicIntel && (publicMagicStatus === 'alive' || publicMagicStatus === 'unknown')
+        ? '\n\n🎩 本局配置含魔术师；'+(publicMagicStatus === 'unknown' ? '隐死亡后其是否仍存活未知，不能把本提示当后台存活情报。' : '按公开局势其尚未出局，但你仍不知道当晚是否换位。')+'只有出现刀口与死讯错位等证据时才提高换位权重；否则不要让魔术师假设垄断决策。需要反刀时同时计算不换/换位两种结果，名义刀口D也可以是自己，但孤狼自刀通常会直接输。最终 action 填名义刀口。'
         : '';
       const intelNote = knownSwapText ? '\n\n【你学到魔术师后的实时私有情报】'+knownSwapText+'你的刀仍受换位影响，请据此反算名义刀口。' : '';
       const ctx = '【机械狼·带刀·第'+S.round+'夜】\n场上除你以外的其他狼系角色已全部出局，现在你是唯一的狼、获得了狼刀。'+brkNote+'\n可刀目标：'+targetList+'\n你可以刀任意候选玩家（包括自己），也可以明确选择空刀制造平安夜。自刀会让唯一狼人面临立即落败，只有确有特殊收益时才考虑；空刀同样是合法策略，系统不会随机补目标。\n你要靠刀人把好人杀到人数≤狼数（或达成屠边）才能赢，正常情况下优先选产出最高的目标。'+magicNote+intelNote;
@@ -16039,16 +16060,32 @@ This instruction has priority over generic advice such as "do not waste the nigh
 【可刀目标】包含你自己和已知狼队友，这不是名单错误。不要仅用“会少一只狼”否决，也不要为了花活随便牺牲。
 若考虑刀狼队友，必须比较：①该队友明天被放逐概率；②正常刀一名好人能减少多少神/民与票；③自刀能否骗解药、制造银水或深水身份、触发狼美人连带/其他死亡收益；④自刀后是否立刻触发好人胜利或让狼队人数崩盘。
 只有“牺牲后的团队预期收益”明确高于“该队友继续存活 + 今晚正常刀好人”时才支持。队友已近乎必出不等于自动该自刀：仍要说明活过今晚概率、女巫是否可能救、谁能靠这刀做成身份。反过来，只要账算得过来，就把它当正常候选，不得以原则性口号拒绝。`;
-    const livingMagician = S.players.some(x => x.alive && x.role && x.role.id === 'magician');
-    const magicKillDecisionHint = livingMagician ? `
+    const magicianStatus = publicConfiguredRoleStatus('magician');
+    const magicianThreatPossible = magicianStatus === 'alive' || magicianStatus === 'unknown';
+    const magicianKnowledgeLine = magicianStatus === 'alive'
+      ? '按当前公开局势，配置中的魔术师尚未出局；你仍不知道其座位和当晚是否换位。'
+      : '本局配置包含魔术师，但隐死亡后其是否仍存活【未知】；提示词不会向你提供后台存活状态。';
+    const magicKillDecisionHint = magicianThreatPossible ? `
 
-【🎩 魔术师仍存活·必须计算名义刀口和交换后落点】
-先把“真正想让谁死（V）”与“今晚 action 要刀谁（名义刀口）”分开：
-· 直刀V：魔术师不换V时杀到V；若把V↔D，则刀转去D。
-· 反刀D：魔术师不换时只杀D；若把V↔D，则刀反而转回V——这才是预判换位后的穿透路线。
-你必须至少比较这两条路线，并估计魔术师选择V↔D的概率。判断依据包括：谁是当夜最显眼的保护对象、魔术师此前公开呈现的思路/落点规律、上一夜结果、以及不能连续两晚重复同一对的限制。也要继续反问：魔术师会不会猜到你反刀D，改换第三人或空过？
-最终按“各落点价值 × 发生概率 − 守卫/女巫扑空风险”选名义刀口。高置信时可以故意刀D，借交换杀回V；证据不足时不要随机玩反刀，选择不交换也有价值、交换后也不至于亏的路线。
-⚠️ <action>只填【名义刀口】；<game>可以说明“真正想杀V，预判V↔D，所以提议刀D”。系统会按 action 执行，不能把真正受害者V误填进去。` : '';
+【🎩 魔术师换位·这是概率分支，不是后台存活情报】
+${magicianKnowledgeLine}
+只有出现“你们的名义刀口与公开死讯明显错位”、可信魔术师声明或其他公开证据时，才提高换位分支权重；没有证据时不得让魔术师假设垄断刀口决策，更不得声称“系统告诉我魔术师仍存活”。
+若需要计算，先区分真正想让谁死（V）与 action 填写的名义刀口：
+· 直刀V：不换时杀V；若V↔D则杀D。
+· 反刀D：不换时杀D；若V↔D则杀回V。D可以是任意合法目标，包括你自己或已知狼队友——这就是自刀反制魔术师，但不交换时会真的牺牲该狼。
+· 第三目标或空刀：当直刀和反刀都被保护、死亡技能或人数风险压低收益时，也要比较。
+必须把“不交换”和“发生V↔D”两种结果分别算清，再比较狼队净收益。孤狼、临近人数线或牺牲后会直接输时，禁止为了展示反套路而自刀；只有交换概率与穿透收益足以覆盖牺牲风险时才选狼队成员作D。
+⚠️ <action>只填【名义刀口】；不能把口头设想的最终受害者V误填进去。` : '';
+    const magicKillFollowupHint = magicianThreatPossible
+      ? `\n【换位校验】魔术师${magicianStatus === 'unknown' ? '是否仍存活未知；只按证据给换位分支分配概率' : '按公开局势尚未出局；仍不知道当晚是否换位'}。若考虑反刀，必须同时写清“不换会死谁、换位会死谁”；D允许是自己或已知队友，但要计算真自刀风险。`
+      : '';
+    const magicOpeningThinking = magicianThreatPossible
+      ? '；若换位分支有现实依据，再明确比较直刀V、反刀D与第三目标/空刀的落点、概率和团队收益'
+      : '';
+    const magicReplyThinking = magicianThreatPossible
+      ? '当前魔术师是否能行动按公开信息可能仍不确定；只在有证据时比较名义刀口于不换/换位后的落点，并核算反刀狼队成员的牺牲风险'
+      : '比较队友方案、保护风险、人数线与次日票型，决定是否改票';
+    const magicReplyGame = magicianThreatPossible ? '；若采用换位反制，说清名义刀口与两种可能落点' : '';
 
     // === 工具函数 ===
     // 多语言打断词典(防 language confusion——Claude/Gemini/DeepSeek 长 prompt 会突然蹦韩日)
@@ -16360,7 +16397,7 @@ ${magicKillDecisionHint}
 ① 提议刀谁(具体到名字)  ② 理由(基于上面的推演，不是"感觉他可疑")  ③ 白天配套战术(如有)
 
 【格式·严格遵守】
-<thinking>按上面①~⑧推演，必须写出刀后队友的暴露/存活变化并比较至少三条路线；若魔术师存活，再明确比较直刀V与反刀D的实际落点、概率和收益</thinking>
+<thinking>按上面①~⑧推演，必须写出刀后队友的暴露/存活变化并比较至少三条路线${magicOpeningThinking}</thinking>
 <game>对队友说的话(口语化,30-140字，说清名义刀口、希望的最终落点和理由)。⚠️ 不要在这里写 &lt;interrupt&gt; 等标签。</game>
 <action>目标完整名字 或 PASS（空刀）</action>
 <interrupt>no</interrupt>`;
@@ -16455,11 +16492,11 @@ B. 坚持自己原本的提议 → 重申理由,<action> 填你支持的目标
 C. 强烈反驳 → <interrupt>yes</interrupt> + 用台词("等等"/"Wait"/"Hold on"等)开头,说明为什么反对当前讨论的方向
 
 可刀目标:${ts}
-${magicKillDecisionHint}${tacticalSacrificeHint}${mistDecisionHint}
+${magicKillFollowupHint}${tacticalSacrificeHint}${mistDecisionHint}
 
 【格式】
-<thinking>队友说的有道理吗?我要不要改主意?当前名义刀口经守卫/女巫与魔术师交换后，最可能实际落到谁？是否存在更优的直刀/反刀路线？</thinking>
-<game>你的回应(口语化,可以附议/反驳/补充,30-140字；有魔术师时说清名义刀口与预期落点)</game>
+<thinking>队友说的有道理吗?我要不要改主意?${magicReplyThinking}</thinking>
+<game>你的回应(口语化,可以附议/反驳/补充,30-140字${magicReplyGame})</game>
 <action>你最终支持的刀口名字 或 PASS（空刀）</action>
 <interrupt>yes 或 no</interrupt>`;
         let result;
@@ -16501,7 +16538,7 @@ ${magicKillDecisionHint}${tacticalSacrificeHint}${mistDecisionHint}
         const allTs = validWolfTargets.map(x => x.name).join(',');
         const voteR = await callAI(w,
           `【狼队·最终投票】讨论已结束。比较下列存活候选与空刀，提交一张最终选票。
-存活可刀:${allTs}${magicKillDecisionHint}
+存活可刀:${allTs}${magicKillFollowupHint}
 
 狼队友也在合法候选中。若讨论形成了战术性牺牲方案，不得因为目标是队友而拒绝投票；按“正常刀好人的收益”与“牺牲队友后的团队净收益”比较后选择。
 ${mistDecisionHint}
@@ -16667,7 +16704,7 @@ ${mistDecisionHint}
       const orderedWolves = [...tieVotingWolves.slice(startIdx), ...tieVotingWolves.slice(0, startIdx)];
       await procWolf(orderedWolves, p => {
         const mates = ws.filter(w=>w.id!==p.id).map(w=>w.name+'('+w.role.name+')').join(',');
-        return `【狼队平票追加讨论】平票目标：${tieNames}。从中选一个最终名义刀口，快速表态！\n你的队友：${mates}${magicKillDecisionHint}\n<thinking>比较两名名义刀口在“不交换/被魔术师交换”下的实际落点与预期收益</thinking>\n<game>我最终选XXX，并说明希望刀最终落到谁</game>\n<action>None</action>`;
+        return `【狼队平票追加讨论】平票目标：${tieNames}。从中选一个最终名义刀口，快速表态！\n你的队友：${mates}${magicKillFollowupHint}\n<thinking>${magicReplyThinking}</thinking>\n<game>我最终选XXX，并说明关键收益</game>\n<action>None</action>`;
       },'🐺平票讨论');
       // 再投一轮
       if (!isAnon()) Render.log('night-detail','🐺 狼人平票再投…');
@@ -16681,7 +16718,7 @@ ${mistDecisionHint}
       const wR2 = {};
       await batchCall(aiW2,'c-wvote', async w => {
         const tn2 = tieNames;
-        wR2[w.id] = await callAI(w,'【平票再投】只能从这些选项中选一个：'+tn2+magicKillDecisionHint+'\n空刀也是正式选项；若选择空刀，在 action 中填写 PASS。\n<thinking>比较正常出刀、魔术师换位风险与战术空刀的收益后再投</thinking>\n<game>简短说明最终选择</game>\n<action>名字 或 PASS</action>',{noMemory:true, skillConfirm:true});
+        wR2[w.id] = await callAI(w,'【平票再投】只能从这些选项中选一个：'+tn2+magicKillFollowupHint+'\n空刀也是正式选项；若选择空刀，在 action 中填写 PASS。\n<thinking>'+magicReplyThinking+'</thinking>\n<game>简短说明最终选择</game>\n<action>名字 或 PASS</action>',{noMemory:true, skillConfirm:true});
       });
       // ★ 导演模式bug修复:对每个 isPlayer 狼人分别弹再投票框
       const humanWolves = tieVotingWolves.filter(w => w.isPlayer);
@@ -18475,7 +18512,7 @@ const PhaseHandlers = {
       //   不会直接入夜，发言面板还停在第二轮。
       result = await mcProcDay(speakOrder, p => _r1Lead+buildSpeakOrderFact(p)+duelPendingNote+'\n【重要】<game>标签里必须写完整的正式发言，直接开口说话，不能写过渡语或草稿。不得少于80字。', S.singleRound ? '发言' : '第一轮') || null;
     } else {
-      result = await proc(speakOrder, p => _r1Lead+buildSpeakOrderFact(p)+duelPendingNote+'\n【重要】<game>标签里必须写完整的正式发言，直接开口说话，不能写"好，开始写"或任何过渡语草稿。发言必须包含：你对当前局势的判断、至少一个具体怀疑对象和理由。隐藏身份的神职，理由只能来自台面上人人可见的信息；要么完整跳身份报记录，要么完全不暗示，没有中间状态。不得少于80字。', '发言');
+      result = await proc(speakOrder, p => _r1Lead+buildSpeakOrderFact(p)+duelPendingNote+'\n【重要】<game>标签里必须写完整的正式发言，直接开口说话，不能写"好，开始写"或任何过渡语草稿。发言必须包含：你对当前局势的判断、至少一个具体怀疑对象和理由。隐藏身份的神职，理由只能来自台面上人人可见的信息，不得无意识半跳泄露私密视角；若有明确战术，也可以暂缓、部分披露或使用符合规则的公开假口径，不必机械交出全部真记录。无论公开怎么说，内部真账本不得改写，并要计算误导好人、暴露保护空档和后续对跳成本。不得少于80字。', '发言');
     }
     if (result && result.startsWith('trial:') && result !== 'trial:tie') {
       if (!await checkEnd()) {
@@ -27929,8 +27966,9 @@ function buildWebPrompt(p) {
 
   if (S.phase === 'night') {
     // 夜晚：根据角色给出具体行动指引
-    const webMagicWolfHint = S.players.some(x => x.alive && x.role && x.role.id === 'magician')
-      ? `\n魔术师仍存活，狼刀可能被换位；把它作为风险考虑，但不要为了反套路而机械套公式。`
+    const webMagicStatus = publicConfiguredRoleStatus('magician');
+    const webMagicWolfHint = webMagicStatus === 'alive' || webMagicStatus === 'unknown'
+      ? `\n本局配置含魔术师；${webMagicStatus === 'unknown' ? '隐死亡后其是否仍存活未知，' : '按公开局势其尚未出局，但当晚是否换位未知，'}只在有刀口错位等证据时把换位作为概率分支，不能声称系统确认其存活，也不要机械反套路。`
       : '';
     const nightTask = {
       werewolf: `现在是狼人密谈阶段。结合当前发言、身份威胁和保护风险，直接提出今晚刀口及最关键理由。${webMagicWolfHint}\n不超过140字。`,
