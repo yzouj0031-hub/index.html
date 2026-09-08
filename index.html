@@ -2561,6 +2561,7 @@ body.has-wp::after {
 <script src="./action-cg.js"></script>
 <script src="./ui-icons.js"></script>
 <script src="./teaching-worldbooks.js"></script>
+<script src="./reasoning-context.js"></script>
 </head>
 <body>
 
@@ -4220,7 +4221,7 @@ const WB_CORE_COMPACT = `你正在真实参与一局狼人杀。像玩家一样�
 
 【证据等级】
 S级：系统明确公开验证的身份/阵营结果、必然技能结算。可以直接作为事实。
-A级：你本人的私密行动记录；记录完整且无人对跳的单边神职。高度可信，但公开身份声明仍非100%验明。
+A级：你本人的私密行动记录，在实际反馈范围内可信；他人转述须结合身份、反证与兑现评估，不等于你亲收的系统信息。
 B级：关键票型、持续行为模式、前后动机、阵营收益、多个真正独立的线索。这是日常推理的主体。
 C级：单次口误、记错规则、措辞混乱、改口、语气强势或软弱、发言长短、过度自信。只能留疑，不能单独放逐或发动致命技能。
 D级：玩家名字、原作人设、面相、单纯“感觉像狼”。不作为证据。
@@ -4248,7 +4249,7 @@ D级：玩家名字、原作人设、面相、单纯“感觉像狼”。不作�
 
 【身份判断】
 - 【身份声明同标尺】自报平民与自报神职都只是待核验声明。多人平民板不存在“无人对跳就坐实平民”：别人没有必要、也不可能通过对跳排他验证一张平民牌；因此自报平民只能暂留，不能自动获得好人身份或替其他人认证“他就是平民”。反过来，某人依据记录、对跳和票型暂认一名神职，也不因“认得快、说得满”自动构成视角漏洞。质疑之前必须用同一标尺检查双方的信息来源、硬矛盾、后续兑现与阵营收益，并复核自己是否也在无验证地接平民牌；这条要求不是把所有跳平民者机械打成狼，而是禁止一边默认接平民、一边惩罚别人暂认神职。
-- 无人对跳本身是强证据：一名神职完整报出身份与记录、经过足够发言机会仍无人对跳，应暂按高可信身份处理。
+- 无人对跳的分量取决于真神是否可能已经出局，以及是否仍有发言机会。记录完整可以提高可信度，但不能仅凭合法、无人反驳就验证身份；可以暂认，同时保留会改变决策的假身份分支。
 - 有人对跳时再比较双方记录、时序、票型和行为，不因谁声音大、谁先跳、谁有口误直接定真假。
 - 神职公开声称的行动记录与他对谁是狼的个人判断要分开。公开记录仍是待核验声明：可按完整性、时序与后续兑现提高权重，但不能因为“真神就该如实报”而自动采信，也不能把公开口径写回系统真实记录。
 - “尚未被系统验明”是thinking里的证据边界，不是每轮公开朗诵的免责声明。对未翻牌死者和自报神职仍要形成可行动的工作判断：根据对跳、记录、技能兑现和票型使用“暂认、偏信、待验、目前不信”，然后继续站边和投票。
@@ -4359,7 +4360,15 @@ function buildActiveRoleTimingBlock(players) {
 
 // 每个 AI 都会收到；只根据实际配置生成，未上场角色不会进入提示。
 function buildActivePublicInteractionRules() {
-  return buildActiveRoleTimingBlock(S && S.players);
+  return buildActiveRoleTimingBlock(S && S.players)
+    + WolfReasoningContext.nightRules((S.players || []).map(p => p.role && p.role.id));
+}
+
+function buildWolfChoiceHint() {
+  const mode = window.TeachingWorldbooks && typeof window.TeachingWorldbooks.mode === 'function'
+    ? window.TeachingWorldbooks.mode() : 'official';
+  return mode === 'clean' || mode === 'custom' ? ''
+    : WolfReasoningContext.wolfChoice(S.players.map(x => x.role && x.role.id));
 }
 
 /* ★ 按需组装世界书：根据玩家身份和当前局势挑选模块 */
@@ -4378,7 +4387,7 @@ function buildWorldBook(p) {
   const officialOn = teachingMode === 'official' || teachingMode === 'hybrid';
   const officialStrategy = officialOn && twb && typeof twb.buildOfficialKnowledge === 'function'
     ? twb.buildOfficialKnowledge(teachingContext) : '';
-  const officialTeaching = officialOn ? WB_CORE_COMPACT + officialStrategy : '';
+  const officialTeaching = officialOn ? WB_CORE_COMPACT + '\n\n' + WolfReasoningContext.disputeReview() + officialStrategy : '';
   const customTeaching = twb && typeof twb.buildInjection === 'function' ? twb.buildInjection(teachingContext) : '';
   // 公共流程属于硬规则，在任何教学模式下都保留，并放在玩家世界书之后再次压住边界。
   // ★ 但「本局角色行动与结算顺序」不再从这里返回：它是规则，不是教学内容，搭教学层
@@ -6027,7 +6036,8 @@ function getRoleList() {
     const name = localized.name || p.role.name;
     c[name] = (c[name]||0) + 1;
   });
-  return Object.entries(c).map(([n,v]) => v > 1 ? v + n : n).join('+');
+  // Public setup ordering must not encode the first seat with each hidden role.
+  return Object.entries(c).sort(([a], [b]) => a.localeCompare(b)).map(([n,v]) => v > 1 ? v + n : n).join('+');
 }
 function getFullRoleBrief(p) {
   // p 为当前玩家。所有角色都只给简短描述——
@@ -6596,19 +6606,6 @@ function buildPublicClaimsBlock(p) {
 3. 已确认的好人是你的资源，不是你的处理对象。他玩得烂、节奏差，你的默认动作是"我怎么用好他、怎么补救这个局面"——放逐票不是用来处罚队友的。
 4. 落子前区分目标是被系统验证，还是仅获玩家背书；不要把声明摘要当成认证名单。结合当前人数、胜负条件与合法行动决定，不由摘要替你指定目标。`;
 
-  // ── 独立建模打火 ──
-  // 模型的病不是"不会想"，是"不被问就不启动"：被提问时它推理比真人还清晰，
-  // 没人问就什么都不主动想、往共识靠。所以把它天性上不会自发去问的问题，做成
-  // thinking 里必须先答的题——给一个没有自发主见的模型，装一个强制启动的主见。
-  out += `
-
-【🔥 发言/投票前，先在 thinking 最前面答这四题】
-这四问你平时不会主动问自己（你的习惯是先看别人怎么说、再往多数那边靠）——正因如此这里替你问出来，逐一作答后再发言。答案不用长，但必须是你自己算的，一个都不许跳过：
-① 独立判断：把所有人的发言先蒙住，只凭上面这些硬事实，我现在最倾向谁是狼、谁可信？——这是你的底盘。之后再听发言，只能在这个底盘上加减，不能因为"大家都在说"就把它推倒重来。
-② 反共识：现在全场正在推、正在信的那件事，万一整个是错的，谁最获利？——如果获利的人恰好在共识的保护圈里、没被怀疑，警惕。
-③ 找缺失：到这一步，有什么按理早该发生、却一直没发生的？（某人若是狼、他队友该有的反应；某个技能该留的痕迹；某种角色该冒的头）——"没发生"本身就是信息，不是空白。
-④ 双向验一遍：我现在最想投的那个人，假设他其实是好人，他这些行为怎么解释？——给不出一个能排除"他是好人"的具体理由，今天就别动他。`;
-
   return out;
 }
 
@@ -6712,7 +6709,7 @@ function uniqueActiveRoleObjects(players) {
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  });
+  }).sort((a,b) => String(a.customId || a.id).localeCompare(String(b.customId || b.id)));
 }
 function activeRoleDescriptionForExport(role, activeIds) {
   return role && role.customId ? (role.desc || '具体技能以系统行动提示和实际结算为准。') : buildActiveRoleExportDesc(role, activeIds);
@@ -6750,7 +6747,7 @@ function buildRulesExport() {
   const hiddenDeath = !!(typeof $ === 'function' && $('m-hdeath') && $('m-hdeath').checked);
   const counts = {};
   players.forEach(p => { if (p.role) counts[p.role.name] = (counts[p.role.name] || 0) + 1; });
-  const config = Object.entries(counts).map(([name, count]) => count > 1 ? `${count}${name}` : name).join(' + ');
+  const config = Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)).map(([name, count]) => count > 1 ? `${count}${name}` : name).join(' + ');
 
   const lines = [
     '【本局实际规则·精简导出】',
@@ -6780,6 +6777,7 @@ function buildRulesExport() {
   });
   lines.push('· 只有以上配置中列出的角色存在于本局；未列出的角色及其机制不得作为推理前提。');
   lines.push(buildActiveRoleTimingBlock(players));
+  lines.push(WolfReasoningContext.nightRules(ids));
 
   const interactions = [];
   const wolfKillLine = buildWolfKillRosterLine(ids);
@@ -6865,6 +6863,7 @@ function buildWebRulesExport(viewerP, options) {
   const _wolfKillLine = buildWolfKillRosterLine(ids);
   if (_wolfKillLine) lines.push('· ' + _wolfKillLine);
   lines.push(buildActiveRoleTimingBlock(S.players || []));
+  lines.push(WolfReasoningContext.nightRules(ids));
 
   if (viewerP && viewerP.role) {
     lines.push('', `【你的能力】${viewerP.role.emoji}${viewerP.role.name}：${buildActiveRoleExportDesc(viewerP.role, ids)}`);
@@ -10602,7 +10601,7 @@ ${userPersona}
     const witchHistory = p.memory.filter(m => m.role==='system' && m.content.includes('【女巫】')).map(m => m.content).join('\n');
     if (witchHistory) potionLines.push('\n【你的历次行动记录·逐夜精确记录】\n' + witchHistory);
     // ★ 反幻觉警告：防止女巫看到"有救药+有人死了"反推"一定是同守同救"
-    potionLines.push('\n⚠️ 铁律：以上行动记录是你实际做过的事的完整清单。如果记录里没写"使用救人药救了XX"，那就是你根本没救人。不要靠推理脑补"我一定救了"——如果你没明确看到救人记录，就是没救。同守同救是小概率机制，不要拿它解释你没做过的事。');
+    potionLines.push('\n⚠️ 铁律：以上行动记录是你实际做过的事的完整清单。如果记录里没写"使用救人药救了XX"，那就是你根本没救人。不要靠推理脑补"我一定救了"——如果你没明确看到救人记录，就是没救。同守同救要求你当夜实际使用解药；不能拿它解释没有执行的救人行动。');
     keyParts.push('【女巫药水状态（实时·绝对准确）】\n' + potionLines.join('\n'));
   }
 
@@ -10654,65 +10653,22 @@ ${userPersona}
       wolfPrivateBlock = `\n\n【狼队专属记录·每次都要看】\n` + killEntries.join('\n') + `\n⚠️ 以上是你们狼队私密信息，白天绝对不能表现出知道这些！`;
     }
   }
-  // ★ 狼队历史战略注入（跨轮持久）。
-  //   ⚠️ 这块最容易帮倒忙：狼队第一夜定的方向会被逐轮重复喂回来，模型天生就
-  //   倾向于和自己先前的输出保持一致，再加上原来那句"不要自相矛盾"，等于明令
-  //   禁止改计划——狼于是抱着一个早就作废的剧本打到死。所以这里做三件事：
-  //     ① 保留每夜【最后】一条而不是第一条：第一条是开场提议，可能当场就被队友
-  //        否掉了，把一个被否决的方案当成"本夜策略"钉在 prompt 里是纯粹的污染；
-  //     ② 给每条标上距今多少轮、以及定这条时手上有多少信息；
-  //     ③ 把落款从"记住这些策略、不要自相矛盾"改成"这是记录不是承诺"。
-  if (_isTeamWolf && S.wolfStrategyLog && S.wolfStrategyLog.length > 0) {
-    const stratByRound = {};
-    S.wolfStrategyLog.forEach(entry => { stratByRound[entry.round] = entry; }); // 后写覆盖 → 取当夜收尾那条
-    const stratEntries = Object.entries(stratByRound).slice(-4).map(([round, entry]) => {
-      const age = (S.round || 0) - Number(round);
-      const ageTag = age <= 0 ? '（今夜）'
-        : age === 1 ? '（1 轮前）'
-        : `（${age} 轮前——那时你们手上的信息比现在少得多）`;
-      return `第${round}夜${ageTag}：${entry.name}——${entry.text}`;
-    });
-    if (stratEntries.length > 0) {
-      wolfPrivateBlock += `\n\n【狼队过往商议记录（这是记录，不是承诺）】\n` + stratEntries.join('\n') +
-        `\n⚠️ 上面是你们【当时】怎么想的，不是你们【现在】必须怎么做。` +
-        `列出来是为了让你知道队友的意图和你们已经对外演过什么，避免白天说出和队友对不上的话——不是要你继续执行它。\n` +
-        `⚠️ 和昨天的自己保持一致，本身不加任何分。计划的前提（目标还没被洗白、队友还没被锁、你还没被架上抗推台）一旦变了，` +
-        `继续执行就是在按一份过期地图走路。狼是人数劣势方，输不起把牌打在一个已经失效的方向上。`;
+  // Full pack dialogue is the source of truth. Never promote a truncated opening
+  // proposal or the last speaker into a system-certified consensus.
+  if (_isTeamWolf) {
+    const packHistory = S.wolfChatHistory && S.wolfChatHistory.length
+      ? S.wolfChatHistory : (S.wolfStrategyLog || []);
+    if (packHistory.length) {
+      const recent = packHistory.filter(entry => Number(entry.round) >= (S.round || 1) - 3);
+      wolfPrivateBlock += '\n\n【狼队商议原文·个人提议，不是全队定案】\n' +
+        recent.map(entry => '第' + entry.round + '夜 ' + entry.name + '：' + entry.text).join('\n') +
+        '\n以逐条发言和最终刀口记录区分提议、反驳、改票与实际行动。旧计划不是承诺；前提改变或被纠正后，重新比较当前收益。';
     }
   }
-
-  // ★ 强制重估打火（狼队专用）。好人那边有【四题】逼它独立推理，狼这边原本什么都没有——
-  //   而狼恰恰是最需要逐轮重估的一方：它有一份写下来的计划，而模型不被问就不会主动
-  //   推翻自己写过的东西。所以把"这计划还成立吗"做成必须先答的题。
-  //   只在第2轮起注入：第一夜刚定计划，没有可重估的东西。
-  if (_isTeamWolf && (S.round || 0) >= 2 && (S.wolfStrategy || (S.wolfStrategyLog && S.wolfStrategyLog.length))) {
-    wolfPrivateBlock += `\n\n【🔥 动手之前，先在 thinking 里答这三题】
-你手上有一份写下来的计划，而写下来的东西对你有黏性——你会不自觉地去执行它、去为它找理由，哪怕它已经不成立。这三题就是用来打断这个惯性的，一个都不许跳过：
-① 变了什么：从定下这个计划到现在，场上发生的最重要的三件事是什么？（谁死了、谁被金水/查杀、票型转向了谁、哪个神职跳出来了）
-② 前提还在吗：这个计划当初能成立，靠的是哪几个前提？逐条对照现在——还剩几条是真的？如果关键前提已经没了，这个计划现在的期望收益是正还是负？
-③ 从零再想一遍：假装你今天才醒过来，只看现在的场面、不知道有过任何计划，你会怎么打？——如果答案和计划不一样，那就按这个答案打，然后在 thinking 里写清楚你为什么改。改计划不需要向任何人交代，打输了才需要。`;
-  }
-  // ★ 狼盟密约·当前方案注入（每轮都强调，防止记忆截断丢失）
-  if (_isTeamWolf && S.wolfStrategy && S.wolfStrategyName) {
-    const revised = S.wolfStrategyRevised ? '（⚠️ 已于第' + S.wolfStrategyRevisedRound + '夜修订）' : '';
-    wolfPrivateBlock += '\n\n【狼盟密约·当前方案' + revised + '】\n方案名：「' + S.wolfStrategyName + '」\n方案内容：' + S.wolfStrategy + '\n这是狼队当前的行动大方向，白天发言、夜晚刀人尽量围绕它配合，不要各打各的。\n\n⚠️ 但密约的性质是【预案，不是死命令】——它是基于制定当晚的信息做的计划，局势每轮都在变。若局势偏离预期（目标已死/队友被锁/你被推上抗推台/好人票型已经转向/出现意外变量），就在 thinking 里说明并切换到当前最优。能配合就配合，该切就切。\n\n⚠️⚠️ 特别是密约里预设的【一次性技能承诺】（如\"XX情况一出现就自爆/开枪/用毒\"这类军令状）：这类承诺绝对不能当触发器无脑执行！每次条件看似满足时，必须先用【当前】场况重新算一遍账：好人的票是不是已经在帮你们干活了？要保的队友是不是其实已经翻盘/已经救不回？现在执行和再等一轮哪个期望更高？算完确认仍然是最优解才执行——密约立的flag不值一张狼牌，当前局面的最优解才值。宁可\"违约\"被队友埋怨，也不要忠实执行一个已经过时的剧本。';
-  }
-  // ★ v9.9.19 方案A：队友悍跳识别提醒（防止狼踩自己悍跳的队友）
-  //   背景：狼临场决定悍跳神职时，这个动作不会自动进入狼队私密信息，
-  //         队友只能从公开发言区看到一个"自称预言家"的人，可能误当真神职/敌方悍跳去踩——
-  //         结果出现"队友拆自己台"。这里给所有狼一个固定的解读框架。
+  // The dated provisional pact is injected once via _buildPrivateInfoLines below.
+  // Pack identity is private knowledge; support, distancing and counterclaims are choices.
   if (_isTeamWolf) {
-    wolfPrivateBlock += '\n\n【⚠️ 识别队友的悍跳——别拆自己台】\n' +
-      '场上任何一个你已知的狼队友，如果跳了神职（说"我是预言家/女巫/守卫/猎人/骑士"、报查验/守护/用药、报警徽流），' +
-      '绝大多数情况这是他在临场执行悍跳——这是狼队的进攻动作，不是真神职，更不是敌方悍跳。\n' +
-      '· 你的默认反应应该是【配合】：站他做金水/做铁好人、帮他对抗真神、把火力往真神或其他好人引。\n' +
-      '· 公开发言里【绝对不要】把悍跳的队友当狼来踩、来质疑、来投——那等于亲手拆狼队的台，' +
-      '把队友辛苦悍跳争来的归票权和身份直接送掉。\n' +
-      '· thinking 里你当然清楚他是队友、他在演；game 里要表现得像"我相信这个预言家"。\n' +
-      '【唯一的例外——什么时候才切割】：只有当队友这个悍跳已经明显演砸、票型已经锁死他必死、' +
-      '你再捞下去自己也会被带进去——这种时候才果断踩他洗自己。这是止损，不是常态。\n' +
-      '判断标准是"他还救得回来吗"，不是"他危不危险"。队友被怀疑≠该切割，被锁死才是。' +
-      '在他还有翻盘空间时切割，是把本可以打赢的局亲手送掉。';
+    wolfPrivateBlock += '\n\n【狼队身份配合】已互认队友跳神职是伪装，不是真神。配合、倒钩、切割或另跳身份都可以，按当前票型、对方真实可见信息和团队收益决定，不要求一直硬保，也不要求必死才切割。若要另编技能记录，先检验它与已知刀口、公开结算能否并存，以及后置位的可能回应会不会拆穿它；对方的未公开行动仍未知。内部知道自己的假口径，不把它当成真实记录。';
   }
   // ★ v9.9.20 方案B：队友悍跳事实注入（确凿事实，不靠队友自己猜）
   //   方案A教"怎么解读"，方案B直接给"谁是悍跳的队友"这个事实，两者分工互补。
@@ -10722,7 +10678,7 @@ ${userPersona}
       .map(([name, info]) => `· ${name} 已于第${info.round}天悍跳【${info.role}】——他是你的狼队友，这个身份是假的。`);
     if (claimEntries.length > 0) {
       wolfPrivateBlock += '\n\n【狼队悍跳实况·确凿事实】\n' + claimEntries.join('\n') +
-        '\n以上玩家跳出来的神职身份都是伪装，他们是你的人。公开场合按【识别队友的悍跳】的原则配合，不要拆台。';
+        '\n以上是已知队友的公开伪装，不是真实技能记录；是否支持或切割由当前局势决定。';
     }
   }
   // ★ 被查杀警报：有人在台面上公开报了针对你的查杀时，强制注入提醒（防记忆截断丢失）
@@ -10989,7 +10945,7 @@ ${userPersona}
   // ★ fix: 原先读的是 S.roles —— 该字段从未被赋值过，activeRolesList 恒为空字符串，
   //   护栏实际发出去是"仅存在以下职业：[]"，毫无约束力且自相矛盾。
   //   改为与【本局配置】同源：直接从场上玩家统计真实在场角色（阵容本就是公开信息，不泄密）。
-  const _presentRoleNames = [...new Set(S.players.map(x => (x.role && x.role.name) || '').filter(Boolean))];
+  const _presentRoleNames = [...new Set(S.players.map(x => (x.role && x.role.name) || '').filter(Boolean))].sort();
   const activeRolesList = _presentRoleNames.join('、');
   // ★ 能力索引：按"能做什么"判断，而不是按"叫什么名字"。
   //   原因：① 子狐这类角色本质是"验阵营"的另一种形态，硬说"本局没有预言家所以没有查验"是错的；
@@ -11120,9 +11076,9 @@ ${userPersona}
   try {
     const _priv = (typeof _buildPrivateInfoLines === 'function') ? _buildPrivateInfoLines(p) : null;
     if (_priv && _priv.length) {
-      privateActionBlock = '\n\n【你的私密行动记录（完整历史，不受记忆条数限制）】\n'
+      privateActionBlock = '\n\n【你的私密信息（行动记录与计划分列）】\n'
         + _priv.map(l => '• ' + l).join('\n')
-        + '\n⚠️ 以上是你实际做过的事的完整清单，只有你知道。记录里没写的事就是你没做过，不要脑补或编造。';
+        + '\n实际行动与系统反馈按原记录保存；密约、计划属于预案，不是已执行事实。不得把公开说辞或推测写回真实账本，也不要补造未收到的反馈。';
     }
   } catch (e) {
     Render.devLog && Render.devLog('warn', '[私密行动史] 构建失败：' + (e && e.message));
@@ -11531,6 +11487,9 @@ async function callAI(p, prompt, opts) {
   const isWolfPlayer = isPackWolfRole(p.role);
   const filteredMemory = p.memory.filter(m => {
     if (m.role !== 'system') return true; // 对话记录不过滤
+    // Retired, clipped synthetic summaries must not override the full dialogue,
+    // including the very first request made after resuming an older save.
+    if (/^【狼队战略·第/.test(m.content || '')) return false;
     if (!isWolfPlayer && (
       m.content.includes('【狼队') ||
       m.content.includes('【狼人') ||
@@ -11680,7 +11639,7 @@ async function callAI(p, prompt, opts) {
     let res;
     if (apiType === 'anthropic') {
       // Anthropic 格式
-      const anthMsgs = msgs.filter(m => m.role !== 'system');
+      const anthMsgs = WolfReasoningContext.providerHistory(msgs);
       const sysContent = msgs.find(m => m.role === 'system')?.content || '';
       // ★ 启用 prompt 缓存：system prompt 通常占输入80%+且每次都一样，缓存后只按10%价格收费
       //   缓存5分钟，狼人杀一局通常10-20分钟内会被高频复用，省钱60-80%
@@ -11746,7 +11705,7 @@ async function callAI(p, prompt, opts) {
 
     } else if (apiType === 'gemini') {
       // Gemini 原生格式
-      const gemMsgs = msgs.filter(m => m.role !== 'system').map(m => ({
+      const gemMsgs = WolfReasoningContext.providerHistory(msgs).map(m => ({
         role: m.role === 'assistant' ? 'model' : 'user',
         parts: [{text: m.content}]
       }));
@@ -13050,13 +13009,11 @@ async function streamSpeak(player, label, result, isWolfChat, noUndo) {
     S.wolfChatHistory.push({round:S.round, name:player.name, text:result.game});
     // ★ 新增：狼队战略共识持久化——把每轮密谈摘要写入所有狼的memory，跨轮可见
     if (!S.wolfStrategyLog) S.wolfStrategyLog = [];
-    S.wolfStrategyLog.push({round: S.round, name: player.name, text: result.game.slice(0, 120)});
-    // 同步注入所有存活狼的memory（覆盖上一条同轮记录，避免重复）
-    const wolves = S.players.filter(p => p.alive && isPackWolfRole(p.role));
-    wolves.forEach(w => {
-      // 移除本轮已有的旧战略条目，避免堆积
-      w.memory = w.memory.filter(m => !(m.role === 'system' && m.content.includes('【狼队战略·第' + S.round)));
-      w.memory.push({role: 'system', content: '【狼队战略·第' + S.round + '夜密谈摘要】' + player.name + '说：' + result.game.slice(0, 120) + (result.game.length > 120 ? '…' : '')});
+    S.wolfStrategyLog.push({round: S.round, name: player.name, text: result.game});
+    // Old saves may still contain a clipped "strategy" memory. Dialogue above is
+    // authoritative; remove those generated summaries, not players' own thoughts.
+    S.players.filter(w => w.alive && isPackWolfRole(w.role)).forEach(w => {
+      w.memory = w.memory.filter(m => !(m.role === 'system' && /^【狼队战略·第/.test(m.content || '')));
     });
   }
   // 技术性失败绝不能伪装成玩家主动“沉默”写进权威事件流，否则后置位 AI 会把
@@ -17362,20 +17319,7 @@ This instruction has priority over generic advice such as "do not waste the nigh
 只有“牺牲后的团队预期收益”明确高于“该队友继续存活 + 今晚正常刀好人”时才支持。队友已近乎必出不等于自动该自刀：仍要说明活过今晚概率、女巫是否可能救、谁能靠这刀做成身份。反过来，只要账算得过来，就把它当正常候选，不得以原则性口号拒绝。`;
     const magicianStatus = publicConfiguredRoleStatus('magician');
     const magicianThreatPossible = magicianStatus === 'alive' || magicianStatus === 'unknown';
-    const magicianKnowledgeLine = magicianStatus === 'alive'
-      ? '按当前公开局势，配置中的魔术师尚未出局；你仍不知道其座位和当晚是否换位。'
-      : '本局配置包含魔术师，但隐死亡后其是否仍存活【未知】；提示词不会向你提供后台存活状态。';
-    const magicKillDecisionHint = magicianThreatPossible ? `
-
-【🎩 魔术师换位·这是概率分支，不是后台存活情报】
-${magicianKnowledgeLine}
-只有出现“你们的名义刀口与公开死讯明显错位”、可信魔术师声明或其他公开证据时，才提高换位分支权重；没有证据时不得让魔术师假设垄断刀口决策，更不得声称“系统告诉我魔术师仍存活”。
-若需要计算，先区分真正想让谁死（V）与 action 填写的名义刀口：
-· 直刀V：不换时杀V；若V↔D则杀D。
-· 反刀D：不换时杀D；若V↔D则杀回V。D可以是任意合法目标，包括你自己或已知狼队友——这就是自刀反制魔术师，但不交换时会真的牺牲该狼。
-· 第三目标或空刀：当直刀和反刀都被保护、死亡技能或人数风险压低收益时，也要比较。
-必须把“不交换”和“发生V↔D”两种结果分别算清，再比较狼队净收益。孤狼、临近人数线或牺牲后会直接输时，禁止为了展示反套路而自刀；只有交换概率与穿透收益足以覆盖牺牲风险时才选狼队成员作D。
-⚠️ <action>只填【名义刀口】；不能把口头设想的最终受害者V误填进去。` : '';
+    // The shared wolfChoice brief owns the full branch comparison.
     const magicKillFollowupHint = magicianThreatPossible
       ? `\n【换位校验】魔术师${magicianStatus === 'unknown' ? '是否仍存活未知；只按证据给换位分支分配概率' : '按公开局势尚未出局；仍不知道当晚是否换位'}。若考虑反刀，必须同时写清“不换会死谁、换位会死谁”；D允许是自己或已知队友，但要计算真自刀风险。`
       : '';
@@ -17675,31 +17619,21 @@ ${magicianKnowledgeLine}
 
 【格式·严格遵守】
 <thinking>分析明天的身份策略、发言分工与票型路线</thinking>
-<game>对队友说的话（口语化，30-140字，只谈明日战术）</game>
+<game>对队友说的话（口语化，只谈明日战术，讲清必要配合）</game>
 <action>None</action>
 <interrupt>no</interrupt>` : `【狼队密谈·开场陈述】这是狼队内部,直接说,不用伪装。
 你的队友:${mates}
 可刀目标:${ts}${deadNote}
 ⚠️ 狼队成员(${selfNames})也属于合法刀口，但只在明确的战术牺牲收益成立时考虑。⚠️ 空刀选项(填None=今晚不刀、制造平安夜)也是正式方案——普通夜晚不能把“纠结/拿不定主意”伪装成战术空刀；未明之雾生效时则必须把空刀与每个受限候选等权比较，不能套用“有目标就正常刀人”。${tacticsHint}${singleWolfHint}${tacticalSacrificeHint}${mistDecisionHint}
 
-【先做刀口推演——别凭感觉报名字】
-在 thinking 里依次想清楚，再给提议：
-① 价值排序：场上谁对好人最关键？真预言家/强逻辑位/带节奏的好人——刀掉收益最高。先列出 1-2 个高价值目标。
-② 扑空风险：我想刀的这个人，今晚可能被守卫守、被女巫救吗？(已跳神职、警长、明显强好人——好人最想保，守卫女巫也最可能扑在他身上，你刀过去大概率扑空白费一晚。)越是"明面上最该刀"的人，越可能有保护。
-③ 反推防御：回顾之前的刀口结果——出现过平安夜吗？那说明好人有守卫或女巫救药(可能还在)。结合女巫药用没用、守卫规律，判断今晚哪些位置"看起来没保护、刀了能稳定见血"。
-④ 综合定目标：在"高价值但可能有保护"和"价值中等但大概率刀得死"之间权衡。有时刀一个没保护的强好人，比硬刚一个被层层保护的明神更划算。
-⑤ 队友生存账：刀掉此人后，哪些队友会因对跳、查杀、站边或票型立刻暴露？谁还能替狼队承担白天火力？刀掉真预言家不是默认最优；如果他一死就会坐实查杀、打穿悍跳队友，必须把这些后续损失算进去。
-⑥ 查验边际威胁：预言家下一验真的大概率命中狼队吗？如果他的查验流只会验好人、他白天已在抗推位，留着他可能比刀掉更能消耗好人轮次。反之，他下一验即将命中核心队友时才是急迫刀口。
-⑦ 方案对比：至少比较“刀预言家”、“刀能重新盘回真相的逻辑位/其他神职”和“留预言家继续被推”三条路线的下一天票型与存活狼数，不准只因“预言家能查验”就结束分析。
-⑧ 白天配套：今晚这刀和明天的发言/跳身份/警上分工怎么衔接。
-${magicKillDecisionHint}
+${buildWolfChoiceHint()}
 
 【你的任务】你是第一个发言(队友的开场你还看不到)，独立给出：
 ① 提议刀谁(具体到名字)  ② 理由(基于上面的推演，不是"感觉他可疑")  ③ 白天配套战术(如有)
 
 【格式·严格遵守】
-<thinking>按上面①~⑧推演，必须写出刀后队友的暴露/存活变化并比较至少三条路线${magicOpeningThinking}</thinking>
-<game>对队友说的话(口语化,30-140字，说清名义刀口、希望的最终落点和理由)。⚠️ 不要在这里写 &lt;interrupt&gt; 等标签。</game>
+<thinking>比较当前可行方案，使用完整结算结果而非未验证假设${magicOpeningThinking}</thinking>
+<game>对队友说的话(口语化,按需展开，说清名义刀口、希望的最终落点和理由)。⚠️ 不要在这里写 &lt;interrupt&gt; 等标签。</game>
 <action>目标完整名字 或 PASS（空刀）</action>
 <interrupt>no</interrupt>`;
       let result;
@@ -17797,7 +17731,7 @@ ${magicKillFollowupHint}${tacticalSacrificeHint}${mistDecisionHint}
 
 【格式】
 <thinking>队友说的有道理吗?我要不要改主意?${magicReplyThinking}</thinking>
-<game>你的回应(口语化,可以附议/反驳/补充,30-140字${magicReplyGame})</game>
+<game>你的回应(口语化,可以附议/反驳/补充,讲清接受或反对的前提${magicReplyGame})</game>
 <action>你最终支持的刀口名字 或 PASS（空刀）</action>
 <interrupt>yes 或 no</interrupt>`;
         let result;
@@ -24595,16 +24529,11 @@ function _buildPrivateInfoLines(p) {
       }
     }
     if (S.wolfStrategy) {
-      // ⚠️ 这一行同时供 API、导出聊天摘要、网页端接力三条路径使用。
-      //   API 路径旁边还有一整段"预案不是死命令"兜着，但摘要和网页端【只有这一行】——
-      //   一句光秃秃的"狼队密约：XXX"喂过去，网页端 AI 会当成本局的行动纲领照着打到死。
-      //   所以时效和定性必须写在这一行里，跟着它走到每一条路径。
-      const _sr = Number(S.wolfStrategyRound) || 1;
-      const _age = (Number(S.round) || 1) - _sr;
-      lines.push(`狼队密约（第${_sr}夜定的开局预案${_age >= 1 ? `，距今 ${_age} 轮` : ''}）：「${S.wolfStrategyName}」— ${S.wolfStrategy}`
-        + (_age >= 1
-          ? `\n  ⚠️ 这是【第${_sr}夜、信息几乎为零时】拟的开局方向，不是本局的行动纲领。列出来只为两件事：知道队友当初想干什么、别在白天说出和队友对不上的话。第2天起该怎么打由【现在的场面】决定：前提没了就换，目标死了就换，你被架上抗推台就先自保。照着一份过期方案打，是狼输掉残局最常见的死法。`
-          : `\n  ⚠️ 这是预案不是死命令：能配合就配合，局势偏离就在 thinking 里说明并切到当前最优。`));
+      // Used by API, summaries and web relay: every path needs the plan's age and status.
+      const planRound = Number(S.wolfStrategyRevised ? S.wolfStrategyRevisedRound : S.wolfStrategyRound) || 1;
+      const age = Math.max(0, (Number(S.round) || 1) - planRound);
+      lines.push(`狼队密约（第${planRound}夜预案，距今${age}轮）：「${S.wolfStrategyName}」— ${S.wolfStrategy}`
+        + '\n这是历史预案，不是当前命令。保留它是为了理解队友原先的意图；前提变化时应重新选择，并结合后续异议判断是否真的达成共识。');
     }
   }
 
@@ -29607,13 +29536,14 @@ function buildWebPrompt(p, opts) {
     // 夜晚：根据角色给出具体行动指引
     const webMagicStatus = publicConfiguredRoleStatus('magician');
     const webMagicWolfHint = webMagicStatus === 'alive' || webMagicStatus === 'unknown'
-      ? `\n本局配置含魔术师；${webMagicStatus === 'unknown' ? '隐死亡后其是否仍存活未知，' : '按公开局势其尚未出局，但当晚是否换位未知，'}只在有刀口错位等证据时把换位作为概率分支，不能声称系统确认其存活，也不要机械反套路。`
+      ? '\n换位能否发生只根据本局公开信息判断，规则说明不代表后台确认魔术师存活。'
       : '';
+    const webWolfChoiceBrief = isPackWolfRole(p.role) ? '\n' + buildWolfChoiceHint() : '';
     const nightTask = {
-      werewolf: `现在是狼人密谈阶段。结合当前发言、身份威胁和保护风险，直接提出今晚刀口及最关键理由。${webMagicWolfHint}\n不超过140字。`,
-      wolfking: `现在是狼人密谈阶段。结合当前发言、身份威胁和保护风险，直接提出今晚刀口及最关键理由。${webMagicWolfHint}\n不超过140字。`,
-      wolfbeauty: `现在是狼人密谈阶段。直接提出今晚刀口、魅惑目标及最关键理由；魅惑不代替狼刀。${webMagicWolfHint}\n不超过140字。`,
-      whitewolf: `现在是狼人密谈阶段。结合当前发言、身份威胁和保护风险，直接提出今晚刀口及最关键理由。${webMagicWolfHint}\n不超过140字。`,
+      werewolf: `现在是狼人密谈阶段。结合当前发言、身份威胁和保护风险，直接提出今晚刀口及最关键理由。${webMagicWolfHint}\n讲清关键条件和取舍，不限制为140字，也不复读整局。`,
+      wolfking: `现在是狼人密谈阶段。结合当前发言、身份威胁和保护风险，直接提出今晚刀口及最关键理由。${webMagicWolfHint}\n讲清关键条件和取舍，不限制为140字，也不复读整局。`,
+      wolfbeauty: `现在是狼人密谈阶段。直接提出今晚刀口、魅惑目标及最关键理由；魅惑不代替狼刀。${webMagicWolfHint}\n讲清关键条件和取舍，不限制为140字，也不复读整局。`,
+      whitewolf: `现在是狼人密谈阶段。结合当前发言、身份威胁和保护风险，直接提出今晚刀口及最关键理由。${webMagicWolfHint}\n讲清关键条件和取舍，不限制为140字，也不复读整局。`,
       seer: `现在是预言家私密查验阶段，不是公开发言。只向主持人提交“查验：目标”，不要解释、不要向其他玩家提问。`,
       witch: (S.witchPotions && S.witchPotions.save)
         ? `现在是女巫私密行动阶段，不是公开发言。你仍持有解药，因此主持人会告诉你今晚的刀口；只提交救/不救以及是否用毒和毒谁，不要追加发言或向其他玩家提问。`
@@ -29623,10 +29553,10 @@ function buildWebPrompt(p, opts) {
     }[p.role.id]
       // 自创/样板狼系角色（如蚀时狼妃）也参与狼人密谈：给和普通狼一致的刀口讨论任务
       || (isPackWolfRole(p.role)
-        ? `现在是狼人密谈阶段。直接提出今晚刀口和最关键理由${(p.role.customAbilities && p.role.customAbilities.length) || p.role.id==='wolfconcubine' ? '；你的额外技能目标随后由主持人引导选择' : ''}。${webMagicWolfHint}\n不超过140字。`
+        ? `现在是狼人密谈阶段。直接提出今晚刀口和最关键理由${(p.role.customAbilities && p.role.customAbilities.length) || p.role.id==='wolfconcubine' ? '；你的额外技能目标随后由主持人引导选择' : ''}。${webMagicWolfHint}\n讲清关键条件和取舍，不限制为140字，也不复读整局。`
         // 好人/第三方的夜间主动技（自创神职等）：技能目标由屏幕选择器引导，无需在此发言
         : `现在是夜间私密操作阶段，不是公开发言。若你有夜间主动技能，只向主持人提交目标或空过，不要解释、不要向其他玩家提问；没有动作则等待天亮。`);
-    phaseBlock = `━━━━ 现在要做什么 ━━━━\n${nightTask}`;
+    phaseBlock = `━━━━ 现在要做什么 ━━━━\n${nightTask}${webWolfChoiceBrief}`;
 
   } else if (S.phase === 'sheriff') {
     // 警长竞选

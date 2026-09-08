@@ -28,6 +28,7 @@ for (const file of ['index.html', 'en/index.html']) {
     isFoxCharmMuteSource:s=>s==='fox'||s==='mechwolf_fox',
     _publiclyRevealedRoleName:()=>'', _publiclyVerifiedAlignment:()=>''});
   const start=html.indexOf('// BEGIN PRIVATE INFORMATION BOUNDARY');
+  vm.runInContext(fs.readFileSync(new URL('reasoning-context.js', root), 'utf8'), ctx);
   const end=html.indexOf('// END PRIVATE INFORMATION BOUNDARY', start);
   vm.runInContext(html.slice(start,end),ctx);
   const privateStart=html.indexOf('function _buildPrivateInfoLines(p)');

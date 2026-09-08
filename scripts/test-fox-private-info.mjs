@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import WolfReasoningContext from '../reasoning-context.js';
 
 for (const path of ['../index.html', '../en/index.html']) {
   const html = fs.readFileSync(new URL(path, import.meta.url), 'utf8');
@@ -65,8 +66,8 @@ for (const path of ['../index.html', '../en/index.html']) {
   const publicRuleEnd = html.indexOf('/* ★ 按需组装世界书', publicRuleStart);
   const publicRuleSource = html.slice(publicRuleStart, publicRuleEnd);
   const roleCatalog = Object.fromEntries(['fox','mechwolf','wolfconcubine','villager'].map(id => [id,{id,name:id}]));
-  const timingApi = new Function('S','ALL_ROLES', `${publicRuleSource}; return {buildActivePublicInteractionRules, PUBLIC_NIGHT_ACTION_ORDER};`);
-  const publicRulesFor = ids => timingApi({players:ids.map(id => ({role:{id,name:id}}))}, roleCatalog).buildActivePublicInteractionRules();
+  const timingApi = new Function('S','ALL_ROLES','WolfReasoningContext', `${publicRuleSource}; return {buildActivePublicInteractionRules, PUBLIC_NIGHT_ACTION_ORDER};`);
+  const publicRulesFor = ids => timingApi({players:ids.map(id => ({role:{id,name:id}}))}, roleCatalog, WolfReasoningContext).buildActivePublicInteractionRules();
   const foxOnlyPublic = publicRulesFor(['fox','villager']);
   if (!/子狐媚惑/.test(foxOnlyPublic) || /机械狼与子狐硬时序|机械媚惑固定先于真子狐/.test(foxOnlyPublic)) {
     throw new Error(`${path} omits the active Fox order or injects Mechanical Wolf order when Mechanical Wolf is absent`);
