@@ -17015,6 +17015,7 @@ const NightActions = {
     // ★ fix: lastGuard 用 -1 表示"没有上次"，避免 null !== null 失效
     const lastGuardId = Number.isInteger(S.nightData.lastGuard) ? S.nightData.lastGuard : -1;
     const ts = alive.filter(p => p.id !== lastGuardId);
+    let guardActionTechnicalFailure = false;
     if (gu.isPlayer) {
       const opts = ts.map(x => ({label:x.id===gu.id?'自己':x.name, value:x.name}));
       opts.push({label:'空守',value:'None',abs:true});
@@ -17036,7 +17037,8 @@ const NightActions = {
       const contextPrompt = '【守卫·第'+S.round+'夜】\n可选目标：'+targets+lastHint+
         (isFirstNight
           ? '\n【第一夜同样没有固定答案】你不知道真实刀口，女巫却能看到刀口并可能选择救人；不能假定“女巫多半不用药”，也不能因为担心撞药就自动空守。请比较：①守中某人的概率与该目标价值；②女巫看到同一刀口后救他的概率；③同守同救会让目标死亡且浪费解药的损失；④空守时完全放弃本夜挡刀的代价；⑤守自己与守其他人的不同风险。根据本局配置和目标分布独立决定守人或空守。'
-          : '\n【根据已有信息重新算，不沿用固定顺序】先推测狼队今晚最可能的1—2个刀口，再比较守目标、守自己和空守。把目标价值、自己是否暴露、女巫解药是否可能仍在、明显神职发生同守同救的概率、上夜守护与死亡结果，以及空守放弃防御的代价一起计算。女巫已无解药或已出局时撞药风险会下降，但这也不自动等于必须守人；每夜都由当前证据决定。');
+          : '\n【根据已有信息重新算，不沿用固定顺序】先推测狼队今晚最可能的1—2个刀口，再比较守目标、守自己和空守。把目标价值、自己是否暴露、女巫解药是否可能仍在、明显神职发生同守同救的概率、上夜守护与死亡结果，以及空守放弃防御的代价一起计算。女巫已无解药或已出局时撞药风险会下降，但这也不自动等于必须守人；每夜都由当前证据决定。')+
+        '\n【自守一致性】自守不是“保存神职”或“求稳”的默认按钮。若你判断自己不在狼队最可能的1—2个刀口中，自守通常接近空耗；只有能说明它为何仍比守更高概率目标或空守更有收益时才选自己。最终行动必须和你刚才的刀口判断一致。';
       const actionPrompt = '基于你上面的推演做决定：守谁？\n姓名可能有中文、英文、罗马音或昵称差异，所以最终操作【只提交目标左侧的座位编号】，不要提交或翻译姓名。\n示例：想守“P3=龙崎”，就输出 <action>P3</action>。\n<action>P编号 或 None（明确空守）</action>\n只写这一行，不要其他内容。';
       const r = await nightTwoStep(gu, contextPrompt, actionPrompt,
         {decisionKind:'guard', decisionCandidates:ts, decisionAllowPass:true});
@@ -17094,23 +17096,14 @@ const NightActions = {
         S.nightData.lastGuard = null;
         Render.devLog('info', `[守卫] 第${S.round}夜 ${gu.name} 主动选择空守`);
       } else {
-        // 非空守意图却始终无法识别目标时，也不能静默变成空守。
-        // 最后兜底沿用原策略：能守自己就守自己；若自己是昨夜目标，则从合法目标中随机选择。
-        if (gu.id !== lastGuardId) {
-          S.nightData.guard = gu.id;
-          S.nightData.lastGuard = gu.id;
-          Render.devLog('warn', `[守卫兜底] 无法识别目标，强制守自己`);
-        } else {
-          const fallback = ts[Math.floor(Math.random() * ts.length)];
-          if (fallback) {
-            S.nightData.guard = fallback.id;
-            S.nightData.lastGuard = fallback.id;
-            Render.devLog('warn', `[守卫兜底] 随机守${fallback.name}`);
-          }
-        }
+        // 两次解析都失败时不能替 AI 发明一个目标，更不能把技术故障伪装成策略性自守。
+        guardActionTechnicalFailure = true;
+        S.nightData.guard = null;
+        S.nightData.lastGuard = null;
+        recordTechnicalActionFailure(gu, '守卫守护', '两次格式纠正后仍无法判断守护目标或明确空守；未强制改成自守');
       }
     }
-    if (!isAnon()) Render.log('night-result','🛡️ 守卫守护了'+(S.nightData.guard!==null?S.players[S.nightData.guard].name:'无人'));
+    if (!isAnon()) Render.log('night-result',guardActionTechnicalFailure?'🛡️ 守卫行动技术解析失败（未守护，不是主动空守）':'🛡️ 守卫守护了'+(S.nightData.guard!==null?S.players[S.nightData.guard].name:'无人'));
     // ★ MC主持人确认守卫目标
     if (isMC() && !gu.isPlayer) {
       // 主持人修改也必须遵守“不能连续两晚守同一人”。
@@ -17118,8 +17111,8 @@ const NightActions = {
       mcOpts.push({label:'空守', value:'None'});
       const aiName = S.nightData.guard !== null ? S.players[S.nightData.guard].name : '空守';
       const chosen = await mcNightConfirm('🛡️ 守卫', gu.name, `决定守护 <b style="color:#68b8e8">${aiName}</b>，可修改：`, mcOpts, S.nightData.guard !== null ? String(S.nightData.guard) : 'None');
-      if (chosen === 'None') { S.nightData.guard = null; S.nightData.lastGuard = null; }
-      else if (chosen !== null) { const newT = S.players[parseInt(chosen)]; if (newT) { S.nightData.guard = newT.id; S.nightData.lastGuard = newT.id; } }
+      if (chosen === 'None') { guardActionTechnicalFailure = false; S.nightData.guard = null; S.nightData.lastGuard = null; }
+      else if (chosen !== null) { const newT = S.players[parseInt(chosen)]; if (newT) { guardActionTechnicalFailure = false; S.nightData.guard = newT.id; S.nightData.lastGuard = newT.id; } }
     }
     const submittedGuard = S.nightData.guard;
     if (submittedGuard !== null) {
@@ -17138,10 +17131,10 @@ const NightActions = {
         S.nightData.lastGuard = S.nightData.guard;
       }
     }
-    gameRecord.push({type:'night_action', role:'guard', round:S.round, casterId:gu.id, target: submittedGuard!==null ? S.players[submittedGuard].name : null, actualTarget:S.nightData.guard!==null ? S.players[S.nightData.guard].name : null, reflected:submittedGuard!==S.nightData.guard});
+    gameRecord.push({type:'night_action', role:'guard', round:S.round, casterId:gu.id, target: submittedGuard!==null ? S.players[submittedGuard].name : null, actualTarget:S.nightData.guard!==null ? S.players[S.nightData.guard].name : null, reflected:submittedGuard!==S.nightData.guard, technical:guardActionTechnicalFailure});
     attachNightThinking(gu.id);
     // ★ 写入guardLog供强制重注入
-    S.guardLog.push({round: S.round, target: submittedGuard !== null ? S.players[submittedGuard].name : '空守'});
+    S.guardLog.push({round: S.round, target: guardActionTechnicalFailure ? '技术解析失败（未守护，非主动空守）' : (submittedGuard !== null ? S.players[submittedGuard].name : '空守')});
     Render.setSpeaking(gu.id,false);
   },
 
