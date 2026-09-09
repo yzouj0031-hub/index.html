@@ -1,11 +1,11 @@
 /* ══════════════════════════════════════════════════════════════════
- *  🔥 APK 自动更新（静默下载 · 下次启动生效）
+ *  🔥 APK 更新（发现新版 → 用户确认 → 下载 → 安全启用 → 启动确认）
  *
  *  这个 app 的本体就是一份 index.html 加几个资源文件，绝大多数更新根本不碰原生层，
  *  所以没必要让用户重装安装包：
  *
- *    启动 → 拉 version.json（约 1KB）→ 有新构建号就后台下载整包 zip
- *         → 交给 CapacitorUpdater 落地 → 下次切后台/重启时换成新版本
+ *    启动检查清单并提示；用户点击后下载，空闲时 set() 启用。
+ *    不调用 next()：把应用切到后台不应意外打断尚未结束的对局。
  *
  *  ⚠️ 为什么用原生插件而不是 Service Worker：
  *  第一版是用 Service Worker + Cache Storage 掉包的，在浏览器里没问题，但在 APK 里
@@ -15,8 +15,8 @@
  *
  *  几条硬性约束：
  *  · 只在 APK 里跑。网页/PWA 刷新本来就是最新的，不需要也不应该走这套。
- *  · 绝不在对局中途换版本：用 next() 而不是 set()，新版本只在切后台或重启后生效，
- *    避免存档格式在一局进行中被换掉。
+ *  · 所有模式通过退出保护器判断是否活跃；没有保护器时禁止自动重载。
+ *  · 下载成功不是安装成功；新页面启动确认后才能宣布更新完成。
  *  · 启动失败自动回滚：插件要求每次启动调用 notifyAppReady()。新包把 app 写崩时这行
  *    永远执行不到，插件超时后自动退回安装包内置版本（见 markBootOk）。
  *  · 装了更新的安装包后旧热更新包自动退位：插件的 resetWhenUpdate（默认开）负责。
@@ -67,19 +67,20 @@
   const APK_PAGE = 'https://github.com/' + REPO + '/releases/tag/android-latest';
 
   const LS_PENDING = 'wolfHotPending';   // 已下载完成、等待生效的 build，避免重复下载
+  const LS_ATTEMPT = 'wolfHotAttempt';
   const LS_LAST = 'wolfHotLastCheck';
   const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;  // 自动检查最多 6 小时一次
 
   const EN = /\/en\//.test(location.pathname);
   const T = EN ? {
-    staged: v => 'Update ' + v + ' downloaded — it will apply next time you open the app.',
+    staged: v => 'Update ' + v + ' downloaded. Ready to restart.',
     current: 'Already up to date.',
     checking: 'Checking for updates…',
     failed: 'Update check failed.',
     needsApk: 'A new version needs a new installer. Tap to open the download page.',
     version: 'Version',
     check: 'Check for updates',
-    pending: v => 'Update ' + v + ' is ready — fully close and reopen the app to use it.'
+    pending: v => 'Update ' + v + ' is ready to install.'
   } : {
     staged: v => '更新包 ' + v + ' 已下载，尚未生效。',
     current: '已经是最新版本。',
@@ -88,7 +89,7 @@
     needsApk: '新版本需要重新安装安装包，点这里打开下载页。',
     version: '版本',
     check: '检查更新',
-    pending: v => '曾下载更新 ' + v + '，当前仍未运行此版本。若重启后仍如此，更新可能未切换或已回滚。'
+    pending: v => '更新包 ' + v + ' 已核对，可立即重启更新。'
   };
 
   async function fetchJson(url) {
@@ -100,16 +101,42 @@
 
   /* 插件要求每次启动都确认「这一版能正常跑」。主脚本完整执行到底才会调到这里；
      新包把 app 写崩时这行永远到不了，插件超时后自动回滚到安装包内置版本。 */
+  let bootTask = null;
   function markBootOk() {
-    try {
-      const r = Updater.notifyAppReady();
-      if (r && typeof r.catch === 'function') r.catch(() => {});
-    } catch (e) {}
-    // 跑起来的就是新版，pending 标记可以清了
-    try {
-      if ((Number(localStorage.getItem(LS_PENDING)) || 0) <= APP_BUILD) localStorage.removeItem(LS_PENDING);
-    } catch (e) {}
+    if (bootTask) return bootTask;
+    bootTask = (async () => {
+      await bounded(Updater.notifyAppReady(), 15000);
+      let attempt;
+      try { attempt = JSON.parse(localStorage.getItem(LS_ATTEMPT) || 'null'); } catch (e) {}
+      const pending = Number(localStorage.getItem(LS_PENDING)) || 0;
+      if (attempt || pending) {
+        const current = await bounded(Updater.current(), 15000);
+        const target = attempt ? attempt.build : pending;
+        const nativeMatches = current && current.bundle &&
+          (current.bundle.version === String(APP_BUILD) || current.bundle.id === 'builtin');
+        if (APP_BUILD >= target && nativeMatches) {
+          localStorage.removeItem(LS_PENDING);
+          localStorage.removeItem(LS_ATTEMPT);
+          setState('success', (EN ? 'Updated successfully. Running ' : '更新完成，当前运行 ') + APP_VERSION, 100);
+        } else if (attempt) {
+          setState('failed', EN ? 'Update did not start or was rolled back. Still running ' + APP_VERSION + '. Retry the download.'
+            : '新版未成功启动或已回滚，当前仍运行 ' + APP_VERSION + '。请重新下载重试。');
+          forceDownload = true;
+          // Keep the attempt until retry or a confirmed successful boot; do not loop installs.
+        }
+      }
+    })().catch(e => {
+      setState('failed', (EN ? 'Could not confirm update startup: ' : '无法确认更新启动状态：') + errorText(e));
+    });
+    return bootTask;
   }
+  function bounded(promise, ms) {
+    let timer;
+    return Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(EN ? 'Operation timed out' : '操作超时')), ms);
+    })]).finally(() => clearTimeout(timer));
+  }
+  function errorText(e) { return e && e.message ? e.message : String(e || ''); }
 
   function metered() {
     const c = navigator.connection;
@@ -117,6 +144,14 @@
   }
 
   let inFlight = null;
+  let applying = false;
+  let deferred = false;
+  let installRequested = false;
+  let forceDownload = false;
+  let targetMeta = null;
+  let readyBundle = null;
+  let dialog = null;
+  let remindedBuild = 0;
   let uiState = { phase: 'idle', text: '', percent: null };
   function setState(phase, text, percent = null) {
     uiState = { phase, text, percent };
@@ -127,21 +162,26 @@
     const progress = document.getElementById('wolf-hot-progress');
     const button = document.getElementById('wolf-hot-check');
     if (status) status.textContent = uiState.text;
-    if (button) button.disabled = !!inFlight;
+    if (button) button.disabled = !!inFlight || applying;
     if (progress) {
-      progress.hidden = !['downloading', 'preparing', 'staged'].includes(uiState.phase);
+      progress.hidden = !['downloading', 'preparing', 'staged', 'applying', 'success'].includes(uiState.phase);
       if (uiState.percent === null) progress.removeAttribute('value');
       else progress.value = uiState.percent;
     }
+    renderDialog();
   }
   function check(opts) {
     if (inFlight) return inFlight;
+    if (applying) return Promise.resolve({status:'applying'});
+    const previous = uiState;
     inFlight = performCheck(opts).then(r => {
       if (r.status === 'current') setState('current', T.current);
       else if (r.status === 'pending') setState('pending', T.pending(r.version || r.build));
       else if (r.status === 'staged') setState('staged', T.staged(r.version || r.build), 100);
+      else if (r.status === 'available') setState('available', (EN ? 'New version available: ' : '发现新版本：') + r.version);
       else if (r.status === 'needs-apk') setState('needs-apk', T.needsApk);
       else if (r.status === 'skipped-metered') setState('idle', EN ? 'Data saver: tap Check to download.' : '省流量模式未自动下载，可点检查更新手动下载。');
+      else if (r.status === 'skipped') { uiState = previous; renderState(); }
       return r;
     }).catch(e => {
       setState('failed', T.failed + ' ' + (e && e.message ? e.message : '') + (EN ? ' Tap Check to retry.' : ' 可再次点检查更新重试。'));
@@ -158,18 +198,25 @@
     try { localStorage.setItem(LS_LAST, String(Date.now())); } catch (e) {}
 
     setState('checking', T.checking);
-    const meta = await fetchJson(MANIFEST_URL);
+    const meta = await bounded(fetchJson(MANIFEST_URL), 20000);
     if (!meta || !Number.isInteger(meta.build)) throw new Error('version.json 格式错误');
 
-    if (meta.build <= APP_BUILD) return { status: 'current', build: APP_BUILD };
+    if (meta.build <= APP_BUILD) { targetMeta = null; readyBundle = null; return { status: 'current', build: APP_BUILD }; }
+    targetMeta = meta;
 
     if ((Number(meta.minNative) || 1) > NATIVE_ABI) {
       return { status: 'needs-apk', build: meta.build, version: meta.version };
     }
 
-    let pending = 0;
-    try { pending = Number(localStorage.getItem(LS_PENDING)) || 0; } catch (e) {}
-    if (pending >= meta.build) return { status: 'pending', build: pending, version: meta.version };
+    // Local flags are only hints. Native inventory is the authority for reusable packages.
+    readyBundle = null;
+    const list = await bounded(Updater.list(), 15000);
+    if (!list || !Array.isArray(list.bundles)) throw new Error(EN ? 'Cannot read installed update packages' : '无法读取原生更新包状态');
+    if (!forceDownload) readyBundle = list.bundles.find(b => b.id && String(b.version) === String(meta.build) &&
+      ['pending', 'success'].includes(b.status)) || null;
+    if (readyBundle) return {status:'pending', build:meta.build, version:meta.version};
+    localStorage.removeItem(LS_PENDING);
+    if (!(opts && opts.download)) return {status:'available', build:meta.build, version:meta.version};
 
     // 整包几 MB：省流量模式和 2G 下不自动下载，用户手动点还是照下。
     if (!manual && metered()) return { status: 'skipped-metered', build: meta.build };
@@ -198,9 +245,13 @@
     });
     if (!bundle || !bundle.id) throw new Error('下载返回异常');
 
-    // next 而不是 set：不打断当前这一局，切后台或重启时才换过去。
-    setState('preparing', EN ? 'Download complete. Scheduling update…' : '下载完成，正在安排下次启动使用…');
-    await Updater.next({ id: bundle.id });
+    // Leave the bundle unqueued; backgrounding during a match must not activate it.
+    setState('preparing', EN ? 'Download complete. Checking update package…' : '下载完成，正在核对更新包…');
+    const downloaded = await bounded(Updater.list(), 15000);
+    readyBundle = downloaded.bundles && downloaded.bundles.find(b => b.id === bundle.id &&
+      String(b.version) === String(meta.build) && ['pending', 'success'].includes(b.status));
+    if (!readyBundle) throw new Error(EN ? 'Downloaded package is not ready' : '下载包尚不可用，请重试');
+    forceDownload = false;
     try { localStorage.setItem(LS_PENDING, String(meta.build)); } catch (e) {}
     return { status: 'staged', build: meta.build, version: meta.version };
     } finally {
@@ -232,10 +283,146 @@
 
   function report(r, manual) {
     if (!r) return;
-    if (r.status === 'staged') toast(T.staged(r.version || r.build));
-    else if (r.status === 'pending' && manual) toast(T.pending(r.version || r.build));
-    else if (r.status === 'needs-apk') toast(T.needsApk, () => window.open(APK_PAGE, '_blank'));
+    if (['available', 'pending', 'staged', 'needs-apk'].includes(r.status)) {
+      if (manual || remindedBuild !== r.build) { remindedBuild = r.build; showDialog(); }
+    }
     else if (r.status === 'current' && manual) toast(T.current);
+  }
+
+  function isActive() {
+    // Fail closed: an uninitialized or broken guard is not proof it is safe to reload.
+    if (!window.WolfExitGuard || typeof window.WolfExitGuard.isActive !== 'function') return true;
+    try { return window.WolfExitGuard.isActive(); } catch (e) { return true; }
+  }
+  async function updateNow() {
+    if (inFlight || applying) return;
+    installRequested = true;
+    showDialog();
+    try {
+      const result = await check({manual:true, download:true});
+      if (installRequested && ['staged', 'pending'].includes(result.status)) await applyReady();
+    } catch (e) { /* check/applyReady expose errors in the persistent UI */ }
+  }
+  async function applyReady() {
+    if (applying || inFlight || !readyBundle || !targetMeta) return;
+    if (isActive()) {
+      deferred = true;
+      setState('deferred', EN ? 'Download ready. Waiting for the session to end; it will not be interrupted.'
+        : '更新包已准备好，等待本局／当前会话结束后自动更新，不会打断游戏。');
+      return;
+    }
+    applying = true;
+    deferred = false;
+    setState('preparing', EN ? 'Preparing to restart…' : '正在准备重启更新…');
+    try {
+      const inventory = await bounded(Updater.list(), 15000);
+      const valid = inventory.bundles && inventory.bundles.find(b => b.id === readyBundle.id &&
+        String(b.version) === String(targetMeta.build) && ['pending', 'success'].includes(b.status));
+      if (!valid) { readyBundle = null; forceDownload = true; throw new Error(EN ? 'Update package is missing or failed. Download again.' : '更新包已丢失或失效，请重新下载。'); }
+      // Recheck after asynchronous native calls; the user may have started a game.
+      if (isActive()) {
+        deferred = true;
+        setState('deferred', EN ? 'Waiting for the session to end.' : '等待当前会话结束后更新。');
+        return;
+      }
+      if (!window.WolfExitGuard.prepareUpdate || window.WolfExitGuard.prepareUpdate() !== true)
+        throw new Error(EN ? 'Session data could not be saved safely. Update has been stopped.' : '当前数据未能安全保存，已停止更新。');
+      localStorage.setItem(LS_ATTEMPT, JSON.stringify({build:targetMeta.build, id:valid.id, from:APP_BUILD}));
+      setState('applying', EN ? 'Restarting into the new version…' : '正在重启并启用新版…');
+      // set() reloads the WebView. Success belongs to markBootOk() in the NEW context.
+      await bounded(Updater.set({id:valid.id}), 30000);
+      await new Promise(resolve => setTimeout(resolve, 10000));
+      throw new Error(EN ? 'The new version did not reload. Retry the update.' : '新版未重新加载，请重试更新。');
+    } catch (e) {
+      forceDownload = true;
+      setState('failed', (EN ? 'Update failed; still running ' : '更新失败，当前仍运行 ') + APP_VERSION + '。' + errorText(e));
+    } finally { applying = false; renderState(); }
+  }
+
+  function showDialog() {
+    if (!dialog) {
+      dialog = document.createElement('div');
+      dialog.id = 'wolf-update-dialog';
+      dialog.style.cssText = 'position:fixed;inset:0;z-index:100001;background:#080813b8;display:flex;align-items:center;justify-content:center;padding:20px;';
+      const card = document.createElement('section');
+      card.setAttribute('role', 'dialog');
+      card.setAttribute('aria-modal', 'true');
+      card.setAttribute('aria-labelledby', 'wolf-update-title');
+      card.style.cssText = 'width:100%;max-width:420px;background:#211e35;color:#f3e8d3;border:1px solid #b79b59;border-radius:18px;padding:24px;box-shadow:0 20px 70px #0008;';
+      const title = document.createElement('h2');
+      title.id = 'wolf-update-title';
+      title.textContent = EN ? 'App update' : '应用更新';
+      title.style.cssText = 'margin:0 0 12px;font-size:22px;';
+      const version = document.createElement('div');
+      version.id = 'wolf-update-version';
+      version.style.cssText = 'color:#cbbd9f;margin-bottom:16px;font-size:14px;';
+      const status = document.createElement('div');
+      status.id = 'wolf-update-message';
+      status.setAttribute('role','status');
+      status.style.cssText = 'line-height:1.7;overflow-wrap:anywhere;min-height:52px;';
+      const progress = document.createElement('progress');
+      progress.id = 'wolf-update-bar';
+      progress.max = 100;
+      progress.setAttribute('aria-label', EN ? 'Update progress' : '更新进度');
+      progress.style.cssText = 'width:100%;height:18px;accent-color:#c8a84c;margin:16px 0;';
+      const primary = document.createElement('button');
+      primary.id = 'wolf-update-primary';
+      primary.style.cssText = 'padding:12px 18px;border:0;border-radius:9px;background:#d5b96c;color:#211e35;font-weight:bold;font-size:16px;cursor:pointer;margin:12px 10px 0 0;';
+      primary.onclick = () => uiState.phase === 'needs-apk' ? window.open(APK_PAGE,'_blank') : updateNow();
+      const later = document.createElement('button');
+      later.id = 'wolf-update-later';
+      later.style.cssText = 'padding:12px;border:1px solid #857650;border-radius:9px;background:transparent;color:#eadfc9;cursor:pointer;';
+      later.onclick = () => {
+        installRequested = false;
+        deferred = false;
+        if (uiState.phase === 'deferred') setState('staged', EN ? 'Update downloaded. Automatic restart canceled; install when ready.'
+          : '更新包已下载，已取消自动重启；可稍后点击启用。', 100);
+        dialog.hidden = true;
+        dialog.style.display = 'none';
+        document.getElementById('wolf-hot-check')?.focus();
+      };
+      card.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && !applying) { event.preventDefault(); later.click(); }
+        if (event.key === 'Tab') {
+          const buttons = [primary,later].filter(b => !b.hidden && !b.disabled);
+          if (!buttons.length) { event.preventDefault(); return; }
+          if (event.shiftKey && document.activeElement === buttons[0]) { event.preventDefault(); buttons[buttons.length-1].focus(); }
+          else if (!event.shiftKey && document.activeElement === buttons[buttons.length-1]) { event.preventDefault(); buttons[0].focus(); }
+        }
+      });
+      card.append(title, version, status, progress, primary, later);
+      dialog.appendChild(card);
+      document.body.appendChild(dialog);
+    }
+    dialog.hidden = false;
+    dialog.style.display = 'flex';
+    renderDialog();
+    const primary = document.getElementById('wolf-update-primary');
+    (primary && !primary.hidden && !primary.disabled ? primary : document.getElementById('wolf-update-later'))?.focus();
+  }
+  function renderDialog() {
+    if (!dialog) return;
+    const busy = !!inFlight || applying;
+    document.getElementById('wolf-update-version').textContent = (EN ? 'Running ' : '当前 ') + APP_VERSION +
+      (targetMeta ? ' → ' + targetMeta.version : '');
+    document.getElementById('wolf-update-message').textContent = uiState.text;
+    const bar = document.getElementById('wolf-update-bar');
+    bar.hidden = !['downloading','preparing','applying','staged','success'].includes(uiState.phase);
+    if (uiState.percent === null) bar.removeAttribute('value'); else bar.value = uiState.percent;
+    const primary = document.getElementById('wolf-update-primary');
+    primary.hidden = ['current','success'].includes(uiState.phase);
+    primary.disabled = busy || deferred;
+    primary.textContent = busy ? (uiState.phase === 'downloading' ? (EN ? 'Downloading…' : '下载中…') : (EN ? 'Updating…' : '正在更新…')) :
+      uiState.phase === 'needs-apk' ? (EN ? 'Get installer' : '获取安装包') :
+      uiState.phase === 'failed' ? (EN ? 'Retry update' : '重新下载并重试') :
+      deferred ? (EN ? 'Waiting for session' : '等待会话结束') :
+      isActive() ? (EN ? 'Download · install after session' : '下载 · 本局结束后更新') :
+      readyBundle ? (EN ? 'Restart and update' : '立即重启更新') : (EN ? 'Update now' : '立即更新');
+    const later = document.getElementById('wolf-update-later');
+    later.disabled = applying;
+    later.textContent = ['success','current'].includes(uiState.phase) ? (EN ? 'Done' : '完成') :
+      busy ? (EN ? 'Background · install later' : '后台下载，稍后安装') :
+      deferred ? (EN ? 'Cancel scheduled restart' : '取消自动重启') : (EN ? 'Later' : '稍后提醒');
   }
 
   /* ── 主菜单挂一行版本号 + 手动检查按钮（DOM 注入，不动 index.html 结构）── */
@@ -247,7 +434,7 @@
     row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;' +
       'flex-wrap:wrap;margin:6px 0 2px;padding:8px 4px;font-size:.85em;color:#b8ad98;';
     const label = document.createElement('span');
-    label.textContent = (EN ? 'Running: ' : '当前运行：') + APP_VERSION + ' · b' + APP_BUILD;
+    label.textContent = (EN ? 'Running: ' : '当前运行：') + (APP_VERSION === 'dev' ? 'dev · b' + APP_BUILD : APP_VERSION);
     const btn = document.createElement('button');
     btn.id = 'wolf-hot-check';
     btn.textContent = T.check;
@@ -272,9 +459,6 @@
     progress.style.cssText = 'width:100%;height:16px;accent-color:#c8a84c;';
     row.append(label, btn, status, progress);
     anchor.insertAdjacentElement('afterend', row);
-    let pending = 0;
-    try { pending = Number(localStorage.getItem(LS_PENDING)) || 0; } catch (e) {}
-    if (uiState.phase === 'idle' && pending > APP_BUILD) setState('pending', T.pending('b' + pending));
     renderState();
   }
 
@@ -283,6 +467,8 @@
     version: APP_VERSION,
     nativeAbi: NATIVE_ABI,
     check,
+    updateNow,
+    applyReady,
     getState: () => ({ ...uiState }),
     markBootOk
   };
@@ -290,6 +476,19 @@
   window.addEventListener('load', () => {
     mountUi();
     // 延后一点再查，别和开局的资源加载抢带宽。
-    setTimeout(() => { check().then(r => report(r, false)).catch(() => {}); }, 8000);
+    Promise.resolve(bootTask).then(() => {
+      if (['success','failed'].includes(uiState.phase)) showDialog();
+      setTimeout(() => {
+        if (['success','failed'].includes(uiState.phase)) return;
+        check({manual:true}).then(r => report(r, false)).catch(() => {});
+      }, 2000);
+    });
+    setInterval(() => {
+      if (deferred && !document.hidden && !isActive()) applyReady();
+    }, 1500);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && !inFlight && !applying && !deferred && !['success','failed'].includes(uiState.phase))
+        check().then(r => report(r, false)).catch(() => {});
+    });
   });
 })();

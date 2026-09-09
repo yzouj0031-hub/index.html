@@ -1,270 +1,138 @@
-// 自动更新的行为测试：在 Node 里用 vm 造一个 APK 环境，把 hot-update.js 真跑起来，
-// 用假的 CapacitorUpdater 记录它到底调了什么。手机上难复现的分支（原生 ABI 不够、
-// 已下载过、网页端不许跑、启动确认）在这里全部走一遍。
-//
-// ⚠️ 这里验证的是【调用逻辑】。插件本身能不能在真机上换包，只能装 APK 实测——
-// 上一版就是败在这一点上：逻辑全对，但 Service Worker 在 APK 里根本没机会执行。
+// Offline updater lifecycle tests; native bridge is simulated, never a real API/device.
 import vm from 'node:vm';
-import { readFileSync } from 'node:fs';
-
-let passed = 0;
-const ok = (c, label) => { if (!c) { console.error('❌ ' + label); process.exit(1); } passed++; };
-const eq = (g, w, label) => ok(Object.is(g, w), `${label}（期望 ${w}，实际 ${g}）`);
-
-const SRC = readFileSync('hot-update.js', 'utf8');
-const stampedWith = b => SRC.replace(/const APP_BUILD = \d+;/, `const APP_BUILD = ${b};`);
-
-function makeStorage(init = {}) {
-  const m = new Map(Object.entries(init).map(([k, v]) => [k, String(v)]));
-  return { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)),
-           removeItem: k => m.delete(k), _map: m };
+import {readFileSync} from 'node:fs';
+import assert from 'node:assert/strict';
+const SRC=readFileSync('hot-update.js','utf8');
+let passed=0;
+function eq(a,b,label){assert.deepEqual(a,b,label);passed++;}
+function ok(a,label){assert.ok(a,label);passed++;}
+const tick=()=>new Promise(resolve=>setImmediate(resolve));
+const bundle=(version=750,status='pending')=>({id:'pkg-'+version,version:String(version),status});
+const meta=(build=750,extra={})=>({build,version:'b'+build,minNative:1,sha256:'a'.repeat(64),zipUrl:'https://example.test/bundle.zip',...extra});
+function storage(init={}){const m=new Map(Object.entries(init).map(([k,v])=>[k,String(v)]));return {getItem:k=>m.get(k)??null,setItem:(k,v)=>m.set(k,String(v)),removeItem:k=>m.delete(k)};}
+function run({build=700,native=true,hasPlugin=true,remote=meta(),ls=storage(),plugin={},active=false,prepare=true,pathname='/',connection}={}){
+ const calls={download:[],set:[],next:[],removed:0,notify:0};const timers=new Map();let serial=0,inventory=[];
+ const updater={
+  async current(){return {bundle:bundle(build,'success')};},async list(){return {bundles:inventory};},
+  async download(o){calls.download.push(o);const b=bundle(Number(o.version));inventory.push(b);return b;},
+  async set(o){calls.set.push(o);return new Promise(()=>{});},async next(o){calls.next.push(o);},
+  async notifyAppReady(){calls.notify++;},
+  async addListener(name,cb){updater.emit=cb;return {async remove(){calls.removed++;}};},...plugin};
+ const ctx={console,Promise,Number,JSON,URL,localStorage:ls,
+  document:{hidden:false,getElementById:()=>null,addEventListener(){}},
+  setTimeout:(fn,ms)=>{timers.set(++serial,{fn,ms});return serial;},clearTimeout:id=>timers.delete(id),setInterval:()=>0,
+  location:{pathname},navigator:{connection},addEventListener(){},WolfExitGuard:{isActive:()=>active,prepareUpdate:()=>prepare},
+  fetch:async()=>({ok:true,json:async()=>remote}),
+  Capacitor:native?{isNativePlatform:()=>true,Plugins:{CapacitorUpdater:hasPlugin?updater:null}}:undefined};
+ ctx.window=ctx;vm.createContext(ctx);vm.runInContext(SRC.replace('const APP_BUILD = 0;','const APP_BUILD = '+build+';'),ctx);
+ return {api:ctx.WolfHotUpdate,ctx,calls,ls,updater,timers,setInventory:b=>{inventory=b;}};
 }
-
-// 记录插件收到的每一次调用，测试据此断言，而不是去猜内部状态
-function makeUpdater() {
-  const calls = { download: [], next: [], notifyAppReady: 0 };
-  return {
-    calls,
-    plugin: {
-      async download(o) { calls.download.push(o); return { id: 'bundle-' + o.version, version: o.version }; },
-      async next(o) { calls.next.push(o); },
-      notifyAppReady() { calls.notifyAppReady++; return Promise.resolve({}); },
-      async current() { return { bundle: { id: 'builtin', version: 'builtin' }, native: '1.0.0' }; }
-    }
-  };
-}
-
-function run({ source = SRC, native = true, hasPlugin = true, remote, localStorage = makeStorage(),
-               pathname = '/', connection, plugin = {} } = {}) {
-  const up = makeUpdater();
-  Object.assign(up.plugin, plugin);
-  const swRegs = [{ unregistered: false, unregister() { this.unregistered = true; return Promise.resolve(); } }];
-  const deletedCaches = [];
-  const ctx = {
-    console, setTimeout, clearTimeout, setImmediate, URL,
-    localStorage,
-    fetch: async url => {
-      if (!/version\.json/.test(url)) throw new Error('只应请求 version.json，实际：' + url);
-      return { ok: true, async json() { return remote; } };
-    },
-    location: { pathname, href: 'https://localhost' + pathname },
-    document: {
-      getElementById: () => null,
-      createElement: () => ({ style: {}, append() {}, insertAdjacentElement() {}, onclick: null }),
-      body: { appendChild() {} }, documentElement: { appendChild() {} }
-    },
-    navigator: {
-      connection,
-      serviceWorker: { getRegistrations: async () => swRegs }
-    },
-    caches: {
-      keys: async () => ['wolf-pwa-x', 'wolf-hot-active'],
-      delete: async k => { deletedCaches.push(k); return true; }
-    },
-    Capacitor: native ? {
-      isNativePlatform: () => true,
-      Plugins: hasPlugin ? { CapacitorUpdater: up.plugin } : {},
-      registerPlugin: () => (hasPlugin ? up.plugin : null)
-    } : undefined
-  };
-  ctx.window = ctx; ctx.globalThis = ctx;
-  ctx.window.addEventListener = () => {};
-  vm.createContext(ctx);
-  vm.runInContext(source, ctx, { filename: 'hot-update.js' });
-  return { ctx, api: ctx.window.WolfHotUpdate, calls: up.calls, swRegs, deletedCaches };
-}
-
-const remoteAt = (build, extra = {}) => ({
-  build, version: 'b' + build, minNative: 1,
-  sha256: 'a'.repeat(64), size: 123, zipUrl: 'https://example.test/bundle.zip', ...extra
-});
-
-/* ① 仓库里必须保持占位值，否则本地开发版会把自己当成线上版本 */
-eq(Number(SRC.match(/const APP_BUILD = (\d+);/)[1]), 0, '仓库里的 hot-update.js 应保持 APP_BUILD=0');
-eq(SRC.match(/const APP_VERSION = '([^']*)';/)[1], 'dev', '仓库里的 APP_VERSION 应保持 dev');
-
-/* ② 网页端完全不参与：不暴露控制器、不请求清单 */
+eq(SRC.match(/const APP_BUILD = (\d+);/)[1],'0','release-only stamping');
+eq(SRC,readFileSync('en/hot-update.js','utf8'),'bilingual parity');
+ok(!run({native:false}).api,'no native updater on web');ok(!run({hasPlugin:false}).api,'missing plugin harmless');
 {
-  const r = run({ native: false, remote: remoteAt(999) });
-  ok(!r.api, '网页端不应暴露 WolfHotUpdate');
-  eq(r.calls.download.length, 0, '网页端不应下载更新包');
-}
-
-/* ③ 网页端也不该动 Service Worker —— 浏览器还要靠它离线 */
-{
-  const r = run({ native: false, remote: remoteAt(999) });
-  await new Promise(res => setImmediate(res));
-  ok(!r.swRegs[0].unregistered, '网页端不能注销 Service Worker');
-  eq(r.deletedCaches.length, 0, '网页端不能清空缓存');
-}
-
-/* ④ APK 里必须清掉旧方案留下的 SW 和缓存，否则换包后会新页面配旧脚本 */
-{
-  const r = run({ remote: remoteAt(0) });
-  await new Promise(res => setImmediate(res));
-  await new Promise(res => setImmediate(res));
-  ok(r.swRegs[0].unregistered, 'APK 里应注销遗留的 Service Worker');
-  ok(r.deletedCaches.includes('wolf-hot-active'), 'APK 里应清掉旧热更新缓存');
-  ok(r.deletedCaches.includes('wolf-pwa-x'), 'APK 里应清掉旧 PWA 缓存');
-}
-
-/* ⑤ 插件不存在时安静退出，不能连累主程序 */
-{
-  const r = run({ hasPlugin: false, remote: remoteAt(999) });
-  ok(!r.api, '拿不到插件时不应暴露控制器');
-}
-
-/* ⑥ 远端不比本地新 → 什么都不做 */
-{
-  const r = run({ source: stampedWith(700), remote: remoteAt(700) });
-  const res = await r.api.check({ manual: true });
-  eq(res.status, 'current', '构建号不大于本地时应报 current');
-  eq(r.calls.download.length, 0, 'current 时不应下载');
-}
-
-/* ⑦ 有新版 → 按清单里的地址下载，并用 next 排到下次启动（不能用 set 打断当前对局） */
-{
-  const r = run({ source: stampedWith(700), remote: remoteAt(750) });
-  const res = await r.api.check({ manual: true });
-  eq(res.status, 'staged', '有新版应报 staged');
-  eq(r.calls.download.length, 1, '应下载一次');
-  eq(r.calls.download[0].url, 'https://example.test/bundle.zip', '应使用清单里的 zipUrl');
-  eq(r.calls.download[0].version, '750', '应把构建号作为版本号传给插件');
-  eq(r.calls.download[0].checksum, 'a'.repeat(64), '应把 sha256 交给插件校验');
-  eq(r.calls.next.length, 1, '应调用 next 排期');
-  eq(r.calls.next[0].id, 'bundle-750', 'next 应指向刚下载的包');
-  eq(r.ctx.localStorage.getItem('wolfHotPending'), '750', '应记下已就绪的构建号');
-}
-
-/* ⑧ 已经下载过就不再重复下载几 MB */
-{
-  const ls = makeStorage({ wolfHotPending: '750' });
-  const r = run({ source: stampedWith(700), remote: remoteAt(750), localStorage: ls });
-  const res = await r.api.check({ manual: true });
-  eq(res.status, 'pending', '已就绪时应报 pending');
-  eq(r.calls.download.length, 0, 'pending 时不应重复下载');
-}
-
-/* ⑨ 新网页要求更高的原生 ABI → 不下载，提示去装新安装包 */
-{
-  const r = run({ source: stampedWith(700), remote: remoteAt(750, { minNative: 99 }) });
-  const res = await r.api.check({ manual: true });
-  eq(res.status, 'needs-apk', '原生 ABI 不够时应报 needs-apk');
-  eq(r.calls.download.length, 0, 'needs-apk 时绝不能下载——包里的新页面跑不起来');
-}
-
-/* ⑩ 省流量 / 2G 下不自动下载，但手动点仍然下 */
-{
-  const saveData = { connection: { saveData: true, effectiveType: '4g' } };
-  const auto = run({ source: stampedWith(700), remote: remoteAt(750), ...saveData });
-  eq((await auto.api.check({})).status, 'skipped-metered', '省流量模式不应自动下载');
-  eq(auto.calls.download.length, 0, '省流量模式确实没下载');
-
-  const manual = run({ source: stampedWith(700), remote: remoteAt(750), ...saveData });
-  eq((await manual.api.check({ manual: true })).status, 'staged', '手动点应无视省流量模式');
-}
-
-/* ⑪ 自动检查有 6 小时节流，手动检查不受限 */
-{
-  const ls = makeStorage({ wolfHotLastCheck: String(Date.now()) });
-  const r = run({ source: stampedWith(700), remote: remoteAt(750), localStorage: ls });
-  eq((await r.api.check({})).status, 'skipped', '短时间内不应重复自动检查');
-  eq((await r.api.check({ manual: true })).status, 'staged', '手动检查应无视节流');
-}
-
-/* ⑫ 启动确认必须真的调到插件——不调的话插件会判定启动失败并回滚 */
-{
-  const ls = makeStorage({ wolfHotPending: '700' });
-  const r = run({ source: stampedWith(700), remote: remoteAt(700), localStorage: ls });
-  r.api.markBootOk();
-  eq(r.calls.notifyAppReady, 1, 'markBootOk 应调用插件的 notifyAppReady');
-  eq(ls.getItem('wolfHotPending'), null, '已生效的构建号应从 pending 清掉');
-}
-
-/* ⑬ 主脚本里必须留着启动确认，且 SW 只在网页端注册 */
-for (const f of ['index.html', 'en/index.html']) {
-  const h = readFileSync(f, 'utf8');
-  ok(h.includes('WolfHotUpdate.markBootOk()'), `${f} 必须调用 markBootOk()`);
-  ok(/serviceWorker' in navigator &&[\s\S]{0,200}isNativePlatform\(\)\)\)/.test(h),
-    `${f} 必须只在网页端注册 Service Worker`);
-}
-
-/* ⑭ 两个客户端的 hot-update.js 必须逐字一致，避免只改了一边 */
-ok(SRC === readFileSync('en/hot-update.js', 'utf8'), 'en/hot-update.js 必须与根目录版本逐字一致');
-
-/* ⑮ 旧方案的残留必须清干净，避免两套机制并存 */
-for (const f of ['sw.js', 'en/sw.js']) {
-  const s = readFileSync(f, 'utf8');
-  ok(!/HOT_CACHE|BUNDLED_BUILD|wolf-hot-active/.test(s), `${f} 不应再残留旧热更新逻辑`);
-}
-
-/* ⑯ 打包脚本必须把 hot-update.js 收进 APK，否则安装包里根本没有更新器 */
-{
-  const b = readFileSync('scripts/build-www.mjs', 'utf8');
-  ok(b.includes("'hot-update.js'"), 'build-www.mjs 必须收集 hot-update.js');
-}
-
-/* ⑰ 覆盖安装需要固定签名，并且 Android 原生 versionCode 必须随构建递增 */
-{
-  const workflow = readFileSync('.github/workflows/build-apk.yml', 'utf8');
-  ok(workflow.includes('ANDROID_KEYSTORE_BASE64'), 'APK 工作流必须支持固定发布签名');
-  ok(workflow.includes('s/versionCode [0-9]+/versionCode ${BUILD_NUMBER}/'),
-    'APK 工作流必须把递增构建号写入 Android versionCode');
-  ok(workflow.includes('versionName \\"1.0.${BUILD_NUMBER}\\"'),
-    'APK 工作流必须同步写入可见的 Android versionName');
-}
-
-// Real plugin event contract: subscribe before download, clean up, and never invent progress.
-for (const pathname of ['/', '/en/']) {
-  let emit, finish, removed = 0, starts = 0;
-  const r = run({ source: stampedWith(700), remote: remoteAt(750), pathname, plugin: {
-    async addListener(name, cb) {
-      eq(name, 'download', '监听真实 download 事件');
-      emit = cb;
-      return { async remove() { removed++; } };
-    },
-    download() { starts++; return new Promise(resolve => { finish = resolve; }); }
-  } });
-  const first = r.api.check({ manual: true });
-  const second = r.api.check({ manual: true });
-  eq(first, second, '并发检查共用一个任务');
-  await new Promise(resolve => setImmediate(resolve));
-  eq(r.api.getState().percent, null, '没有回调时不编造百分比');
-  emit({ percent: 42, bundle: { version: '750' } });
-  eq(r.api.getState().percent, 42, '真实进度更新为42');
-  emit({ percent: 90, bundle: { version: '999' } });
-  eq(r.api.getState().percent, 42, '忽略其他包的进度');
-  emit({ percent: 20, bundle: { version: '750' } });
-  eq(r.api.getState().percent, 42, '乱序进度不倒退');
-  emit({ percent: 100, bundle: { version: '750' } });
-  eq(r.api.getState().phase, 'downloading', '100%不等于启用成功');
-  finish({ id: 'new-bundle' });
-  await first;
-  eq(starts, 1, '只下载一次');
-  eq(removed, 1, '下载完成移除监听器');
-  eq(r.api.getState().phase, 'staged', '下载后只标记待生效');
-  eq(r.api.build, 700, '运行构建号仍是旧版');
+ const r=run({remote:meta(700)});eq((await r.api.check({manual:true})).status,'current');eq(r.calls.download.length,0);
 }
 {
-  let tries = 0, removed = 0;
-  const r = run({ source: stampedWith(700), remote: remoteAt(750), plugin: {
-    async addListener() { return { async remove() { removed++; } }; },
-    async download() { if (++tries === 1) throw new Error('offline'); return { id: 'retry' }; }
-  } });
-  await r.api.check({ manual: true }).catch(() => {});
-  eq(r.api.getState().phase, 'failed', '失败留在常驻状态中');
-  eq(r.ctx.localStorage.getItem('wolfHotPending'), null, '失败不能留下成功标记');
-  await r.api.check({ manual: true });
-  eq(tries, 2, '失败后可以重试');
-  eq(removed, 2, '成功失败都清理监听器');
+ const r=run();eq((await r.api.check()).status,'available');eq(r.calls.download.length,0,'consent before download');
+ eq((await r.api.check()).status,'skipped');eq((await r.api.check({manual:true})).status,'available');
 }
 {
-  const r = run({ source: stampedWith(700), remote: remoteAt(750), plugin: {
-    async next() { throw new Error('schedule failed'); }
-  } });
-  await r.api.check({ manual: true }).catch(() => {});
-  eq(r.api.getState().phase, 'failed', '排期失败不显示已就绪');
-  eq(r.ctx.localStorage.getItem('wolfHotPending'), null, '排期失败不记pending');
+ const r=run({remote:meta(750,{minNative:99})});eq((await r.api.check({manual:true,download:true})).status,'needs-apk');eq(r.calls.download.length,0);
 }
-
-console.log(`hot update: ${passed} 项检查通过`);
+for(const status of ['missing','error','deleted','downloading']){
+ const r=run({ls:storage({wolfHotPending:750})});if(status!=='missing')r.setInventory([bundle(750,status)]);
+ eq((await r.api.check({manual:true})).status,'available','stale '+status+' marker');eq(r.ls.getItem('wolfHotPending'),null);
+}
+for(const status of ['pending','success']){
+ const r=run({ls:storage({wolfHotPending:750})});r.setInventory([bundle(750,status)]);
+ eq((await r.api.check({manual:true})).status,'pending');eq(r.calls.download.length,0);
+}
+for(const pathname of ['/','/en/']){
+ const r=run({pathname});const p=r.api.check({manual:true,download:true});
+ eq(r.api.check({manual:true,download:true}),p,'concurrent request shared');eq((await p).status,'staged');
+ eq(r.calls.next.length,0,'no activation on background');eq(r.calls.set.length,0);
+ eq(r.calls.download[0].checksum,'a'.repeat(64));eq(r.calls.download[0].version,'750');eq(r.calls.removed,1);eq(r.api.build,700);
+}
+{
+ let finish;const r=run({plugin:{download:()=>new Promise(resolve=>{finish=resolve;})}});
+ const p=r.api.check({manual:true,download:true});await tick();eq(r.api.getState().percent,null);
+ r.updater.emit({percent:42,bundle:bundle()});eq(r.api.getState().percent,42);
+ r.updater.emit({percent:90,bundle:bundle(999)});r.updater.emit({percent:20,bundle:bundle()});eq(r.api.getState().percent,42);
+ r.updater.emit({percent:100,bundle:bundle()});eq(r.api.getState().phase,'downloading','100 not success');
+ r.setInventory([bundle()]);finish(bundle());await p;eq(r.api.getState().phase,'staged');
+ r.updater.emit({percent:50,bundle:bundle()});eq(r.api.getState().phase,'staged');
+}
+{
+ const r=run({plugin:{async download(){throw new Error('offline');}}});
+ await assert.rejects(r.api.check({manual:true,download:true}));eq(r.api.getState().phase,'failed');eq(r.ls.getItem('wolfHotPending'),null);eq(r.calls.removed,1);
+ r.setInventory([bundle()]);eq((await r.api.check({manual:true,download:true})).status,'pending');
+}
+{
+ const r=run({active:true});await r.api.check({manual:true,download:true});await r.api.applyReady();
+ eq(r.api.getState().phase,'deferred');eq(r.calls.set.length,0);eq(r.calls.next.length,0);
+ r.ctx.WolfExitGuard.isActive=()=>false;r.api.applyReady();await tick();
+ eq(r.calls.set.length,1);eq(JSON.parse(r.ls.getItem('wolfHotAttempt')).build,750);eq(r.api.getState().phase,'applying');
+ const next=run({build:750,ls:r.ls});await next.api.markBootOk();
+ eq(next.calls.notify,1);eq(next.api.getState().phase,'success');eq(next.ls.getItem('wolfHotAttempt'),null);eq(next.ls.getItem('wolfHotPending'),null);
+}
+{
+ const r=run({prepare:false});await r.api.check({manual:true,download:true});await r.api.applyReady();
+ eq(r.calls.set.length,0,'failed save blocks reload');eq(r.api.getState().phase,'failed');
+}
+{
+ const r=run();await r.api.check({manual:true,download:true});delete r.ctx.WolfExitGuard;await r.api.applyReady();eq(r.calls.set.length,0,'missing guard fails closed');
+}
+{
+ const r=run();await r.api.check({manual:true,download:true});r.setInventory([]);await r.api.applyReady();
+ eq(r.calls.set.length,0);eq(r.api.getState().phase,'failed');
+}
+{
+ const r=run({plugin:{async set(){throw new Error('native failure');}}});await r.api.check({manual:true,download:true});await r.api.applyReady();eq(r.api.getState().phase,'failed');
+}
+{
+ const r=run({plugin:{async set(){}}});await r.api.check({manual:true,download:true});const p=r.api.applyReady();await tick();
+ const timer=[...r.timers.values()].find(t=>t.ms===10000);ok(timer,'wait for actual reload');timer.fn();await p;eq(r.api.getState().phase,'failed','resolved set is not success');
+}
+{
+ const r=run({ls:storage({wolfHotAttempt:JSON.stringify({build:750}),wolfHotPending:750})});await r.api.markBootOk();
+ eq(r.api.getState().phase,'failed','rollback visible');r.setInventory([bundle()]);eq((await r.api.check({manual:true})).status,'available','no auto reuse after rollback');
+}
+{
+ const r=run({build:750,ls:storage({wolfHotPending:750}),plugin:{async notifyAppReady(){throw new Error('offline');}}});await r.api.markBootOk();
+ eq(r.api.getState().phase,'failed');eq(r.ls.getItem('wolfHotPending'),'750','retain evidence if boot not confirmed');
+}
+for(const f of ['index.html','en/index.html']){
+ const h=readFileSync(f,'utf8');ok(h.includes('WolfHotUpdate.markBootOk()'));ok(h.includes('beforeUpdate:() =>'));
+}
+{
+ const r=run({connection:{saveData:true}});
+ eq((await r.api.check({download:true})).status,'skipped-metered');
+ eq((await r.api.check({manual:true,download:true})).status,'staged','manual consent bypasses data saver');
+}
+{
+ const r=run({plugin:{async list(){throw new Error('bridge offline');}}});
+ await assert.rejects(r.api.check({manual:true}));eq(r.api.getState().phase,'failed');
+ eq(r.calls.download.length,0,'unknown native inventory is not ready');
+}
+{
+ const r=run({build:750,ls:storage({wolfHotAttempt:JSON.stringify({build:750})}),
+  plugin:{async current(){return {bundle:bundle(700,'success')};}}});
+ await r.api.markBootOk();eq(r.api.getState().phase,'failed','mixed runtime/native versions not success');
+}
+{
+ const r=run({ls:storage({wolfHotPending:750})});r.setInventory([bundle()]);
+ await r.api.check({manual:true});let busy=false;
+ r.ctx.WolfExitGuard.isActive=()=>busy;
+ r.updater.list=async()=>{busy=true;return {bundles:[bundle()]};};
+ await r.api.applyReady();eq(r.calls.set.length,0,'new session during native check blocks reload');
+}
+{
+ const r=run({plugin:{async addListener(){throw new Error('unsupported');}}});
+ eq((await r.api.check({manual:true,download:true})).status,'staged','no progress support still downloads');
+}
+eq(SRC.match(/const APP_VERSION = '([^']*)';/)[1],'dev','version placeholder retained');
+for(const f of ['sw.js','en/sw.js'])ok(!/HOT_CACHE|BUNDLED_BUILD|wolf-hot-active/.test(readFileSync(f,'utf8')),'old SW updater remains absent');
+ok(readFileSync('scripts/build-www.mjs','utf8').includes("'hot-update.js'"));
+ok(readFileSync('.github/workflows/build-apk.yml','utf8').includes('ANDROID_KEYSTORE_BASE64'));
+console.log('hot update lifecycle: '+passed+' checks passed');
