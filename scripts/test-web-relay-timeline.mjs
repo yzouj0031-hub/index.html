@@ -122,9 +122,9 @@ for (const file of ['index.html', 'en/index.html']) {
     assert.match(fact, /不要拿发言先后给对方安动机/, `${file}: 发言顺序事实缺少“不给对方安动机”`);
     assert.equal(vm.runInNewContext(`${html.slice(start, end)}; buildSpeakOrderFact`, {S:{_daySpeakOrder:[]}})(order[0]), '', `${file}: 无顺序时应返回空串`);
     for (const marker of [
-      '_r1Lead+buildSpeakOrderFact(p)+duelPendingNote+',
-      '${r1Echo}${buildSpeakOrderFact(p)}',
-      '${deathAnnounce}${round2hint}${buildSpeakOrderFact(p)}',
+      '_r1Lead+buildNowFacts(p)+buildSpeakOrderFact(p)+duelPendingNote+',
+      '${r1Echo}${buildNowFacts(p)}${buildSpeakOrderFact(p)}',
+      '${deathAnnounce}${round2hint}${buildNowFacts(p)}${buildSpeakOrderFact(p)}',
     ]) assert.ok(html.includes(marker), `${file}: 发言提示缺少接入 ${marker}`);
   }
 
