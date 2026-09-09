@@ -245,9 +245,54 @@ for (const file of FILES) {
   assert.equal(memoryEcho('<thinking>全是思考</thinking>'), '<thinking>全是思考</thinking>', `${file}: 剥空时必须回退原文`);
   assert.equal(memoryEcho(null), '', `${file}: memoryEcho 对 null 不安全`);
   for (const m of [
-    "{role:'assistant',content:memoryEcho(content)}",
-    "{role:'assistant',content:memoryEcho(finalContent || parsed.game)}",
-  ]) assert.ok(src.includes(m), `${file}: 仍有路径把原始 <thinking> 存进记忆 → ${m}`);
+    "{role:'assistant',content:memoryEcho(content),thinking:memoryThinking(content, parsed),round:S.round,phase:S.phase}",
+    "{role:'assistant',content:memoryEcho(finalContent || parsed.game),thinking:memoryThinking(finalContent, parsed),round:S.round,phase:S.phase}",
+  ]) assert.ok(src.includes(m), `${file}: 记忆写入点没有按新格式存思考/轮次 → ${m}`);
+  assert.ok(src.includes("{role:'user',content:prompt,isTaskPrompt:true,round:S.round,phase:S.phase}"), `${file}: 任务提示词记录没有打轮次标记`);
+}
+
+// ── 9b. 私密思考按新鲜度分档：只带回最近一轮，更早的退化成只剩公开发言 ──────────
+// 全存会让模型自己几天前的推理堵在决策点旁边（最近性压过时间轴）；全删又让"我下一个
+// 验谁"这类未宣告的打算跨不过回合。折中是滑动窗口 + 总量预算。
+for (const file of FILES) {
+  const src = read(file);
+  const a = src.indexOf('const THINK_CARRY_ROUNDS');
+  const b = src.indexOf('\nasync function callAI(', a);
+  assert.ok(a >= 0 && b > a, `${file}: 思考携带窗口未找到`);
+  assert.ok(src.includes('memSlice = attachRecentThinking(memSlice);'), `${file}: 思考没有被贴回提示词`);
+
+  const ctx = { S: { round: 4 } };
+  vm.createContext(ctx);
+  vm.runInContext(src.slice(a, b), ctx);
+
+  const mk = (r, ph, th) => ({ role: 'assistant', round: r, phase: ph, thinking: th, content: '<game>说了点什么</game>' });
+  const carried = (m) => m.content.startsWith('<thinking>');
+
+  const out = ctx.attachRecentThinking([
+    { role: 'user', content: 'x', round: 2, phase: 'day' }, mk(2, 'day', '第2天的想法'),
+    { role: 'user', content: 'x', round: 3, phase: 'night' }, mk(3, 'night', '第3夜的想法'),
+    { role: 'user', content: 'x', round: 4, phase: 'night' }, mk(4, 'night', '第4夜的想法'),
+  ]);
+  const asst = out.filter((m) => m.role === 'assistant');
+  assert.equal(carried(asst[0]), false, `${file}: 第2轮（超出窗口）的思考不该被带回`);
+  assert.equal(carried(asst[1]), true, `${file}: 上一轮的思考应该被带回`);
+  assert.equal(carried(asst[2]), true, `${file}: 本轮的思考应该被带回`);
+  assert.match(asst[1].content, /【第3夜·你自己当时的私密思考，仅供参考，不是当前结论】/, `${file}: 带回的思考没有标注时点与"不是当前结论"`);
+  assert.match(asst[0].content, /^<game>/, `${file}: 超窗口的回合应只剩公开发言`);
+
+  // 总量预算：从新到旧填，填不下的直接不带
+  const big = ctx.attachRecentThinking([mk(4, 'night', 'X'.repeat(3000)), mk(4, 'day', 'Y'.repeat(3000))]);
+  assert.equal(carried(big[1]), true, `${file}: 最新一条思考应优先带回`);
+  assert.equal(carried(big[0]), false, `${file}: 超出总量预算的更早思考不该被带回`);
+
+  // 旧存档没有轮次标记，一律按"太旧"处理，不能凭空带回
+  const legacy = ctx.attachRecentThinking([{ role: 'assistant', thinking: '旧存档', content: '<game>x</game>' }]);
+  assert.equal(carried(legacy[0]), false, `${file}: 无轮次标记的旧记录不该被带回`);
+
+  // 单条上限 + 原生 reasoning 兜底
+  assert.ok(ctx.memoryThinking('<thinking>' + 'Z'.repeat(3000) + '</thinking>').length <= 1220, `${file}: 单条思考没有截断`);
+  assert.equal(ctx.memoryThinking('<game>只有发言</game>', { thinking: '原生思考' }), '原生思考', `${file}: 原生 reasoning 字段没有兜底`);
+  assert.equal(ctx.memoryThinking('<game>只有发言</game>'), '', `${file}: 没有思考时不该凭空造一条`);
 }
 
 // ── 10. 私密夜间记录：被封锁不是空过，未知角色不能漏出英文 id ──────────────────

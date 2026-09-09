@@ -11554,6 +11554,46 @@ function memoryEcho(content) {
   return stripped || raw;
 }
 
+// ★ 私密思考按新鲜度分档，而不是全存或全删。
+//   全存：到第3天，离决策点最近的一大块文本是模型自己前几天的推理（8k~15k 字），
+//         最近性于是站在"我上次的结论"那边，压过了此后推翻它的时间轴。
+//   全删：未宣告的打算（"我下一个验P3""我打算明天卖队友"）跨不过回合，短程连续性断掉。
+//   折中：思考照常存进 p.memory，但拼提示词时只把【最近 THINK_CARRY_ROUNDS 轮】的带回去，
+//         从新到旧填，填满 THINK_CARRY_TOTAL 就停。更早的自动退化成只剩公开发言。
+const THINK_CARRY_ROUNDS = 1;    // 0=只带本轮；1=连上一轮（上一天/上一夜）一起带
+const THINK_CARRY_MAX    = 1200; // 单条思考带回的字数上限
+const THINK_CARRY_TOTAL  = 4000; // 本次请求带回的思考总字数上限
+
+function memoryThinking(content, parsed) {
+  let t = '';
+  const m = String(content == null ? '' : content).match(/<thinking>([\s\S]*?)<\/thinking>/i);
+  if (m) t = m[1].trim();
+  // 部分模型的思考走原生 reasoning 字段，不在 <thinking> 标签里；parseAI 已经归一化过
+  if (!t && parsed && parsed.thinking) t = String(parsed.thinking).trim();
+  if (!t) return '';
+  return t.length > THINK_CARRY_MAX ? t.slice(0, THINK_CARRY_MAX) + '…（此处省略，原文更长）' : t;
+}
+
+// 从最新往回走，把仍在新鲜期内的思考重新贴回对应的 assistant 回合。
+// 只影响本次请求要发出去的副本，不改动 p.memory 本身。
+function attachRecentThinking(slice) {
+  const cur = Number.isFinite(S && S.round) ? S.round : 1;
+  const keepFrom = cur - THINK_CARRY_ROUNDS;
+  let budget = THINK_CARRY_TOTAL;
+  const out = slice.slice();
+  for (let i = out.length - 1; i >= 0; i--) {
+    const m = out[i];
+    if (!m || m.role !== 'assistant' || !m.thinking) continue;
+    // 没有轮次标记的是旧存档里的记录，一律按"太旧"处理，不带回
+    if (!Number.isFinite(m.round) || m.round < keepFrom) continue;
+    if (m.thinking.length > budget) break;   // 预算见底：更早的都不再带
+    budget -= m.thinking.length;
+    const when = `第${m.round}${m.phase === 'night' ? '夜' : (m.phase === 'sheriff' ? '天·警长竞选' : '天')}`;
+    out[i] = {...m, content: `<thinking>【${when}·你自己当时的私密思考，仅供参考，不是当前结论】\n${m.thinking}</thinking>\n${m.content}`};
+  }
+  return out;
+}
+
 async function callAI(p, prompt, opts) {
   opts = opts || {};
   const _reasoningBase = resolveAIReasoning(p, prompt, opts);
@@ -11613,6 +11653,9 @@ async function callAI(p, prompt, opts) {
   const _memDropped = filteredMemory.length - memSlice.length;
   // 半对开头（孤儿 assistant）会被模型读成"我现在正在主张这个结论"，而它其实是三天前的回答
   while (memSlice.length && memSlice[0].role === 'assistant') memSlice = memSlice.slice(1);
+  // ★ 把仍在新鲜期内的私密思考贴回去（从新到旧，受总量预算约束）。
+  //   更早的回合只剩公开发言，不再把陈旧结论堆在决策点旁边。
+  memSlice = attachRecentThinking(memSlice);
   if (_memDropped > 0) {
     memSlice = [{role:'system', content:`【记忆窗口说明】你更早的 ${_memDropped} 条个人记录（你自己的任务、你自己的回答、系统发给你的私密通知）因记忆上限被移出了本次请求——它们确实发生过，只是这次没带上。系统提示里的【权威事件时间轴】和【发言记录】是完整的，覆盖第1夜到现在：凡是时间轴上有、而你在下面的对话里找不到的事，一律以时间轴为准；不要因为"想不起来"就断言自己当时没做过、没说过或不在场。`}].concat(memSlice);
   }
@@ -11817,7 +11860,7 @@ async function callAI(p, prompt, opts) {
       }
       clearTimeout(timeoutId);
       const validated = checkFmt(parsed);
-      if (!opts.noMemory) p.memory.push({role:'user',content:prompt,isTaskPrompt:true},{role:'assistant',content:memoryEcho(content)});
+      if (!opts.noMemory) p.memory.push({role:'user',content:prompt,isTaskPrompt:true,round:S.round,phase:S.phase},{role:'assistant',content:memoryEcho(content),thinking:memoryThinking(content, parsed),round:S.round,phase:S.phase});
       return validated;
 
     } else if (apiType === 'gemini') {
@@ -11929,7 +11972,7 @@ async function callAI(p, prompt, opts) {
       if (parsed._isLeak) throw new Error('内心戏泄漏到发言');
       clearTimeout(timeoutId);
       const validated = checkFmt(parsed);
-      if (!opts.noMemory) p.memory.push({role:'user',content:prompt,isTaskPrompt:true},{role:'assistant',content:memoryEcho(content)});
+      if (!opts.noMemory) p.memory.push({role:'user',content:prompt,isTaskPrompt:true,round:S.round,phase:S.phase},{role:'assistant',content:memoryEcho(content),thinking:memoryThinking(content, parsed),round:S.round,phase:S.phase});
       return validated;
 
     } else {
@@ -12209,7 +12252,7 @@ async function callAI(p, prompt, opts) {
       if (parsed._isLeak) throw new Error('内心戏泄漏到发言');
       clearTimeout(timeoutId);
       const validated = checkFmt(parsed);
-      if (!opts.noMemory) p.memory.push({role:'user',content:prompt,isTaskPrompt:true},{role:'assistant',content:memoryEcho(finalContent || parsed.game)});
+      if (!opts.noMemory) p.memory.push({role:'user',content:prompt,isTaskPrompt:true,round:S.round,phase:S.phase},{role:'assistant',content:memoryEcho(finalContent || parsed.game),thinking:memoryThinking(finalContent, parsed),round:S.round,phase:S.phase});
       return validated;
     }
   }
