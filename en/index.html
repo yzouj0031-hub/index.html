@@ -9491,7 +9491,10 @@ ${userPersona}
     const publicAlignment = _publiclyVerifiedAlignment(x.name);
     let r = (!hdeath && x.revealed) ? x.role.name : (isPackWolfRole(p.role) && isPackWolfRole(x.role) ? x.role.name : (publicRole ? '公开身份·'+publicRole : (publicAlignment ? '公开验证·'+publicAlignment : '?')));
     const causeText = _formatPlayerVisibleDeathCause(x, {compact:true});
-    return `${x.name}(P${x.id+1})${r!=='?'?'('+r+')':''}[第${x.deathRound}回${x.deathPhase==='night'?'夜':'日'}·${causeText}]`;
+    // ★「第2回日」在别处从不出现，也不是狼人杀里的说法：模型得猜它是第2轮白天、
+    //   第2个白天阶段还是第2次天亮，于是同一条死亡在死者名单和时间轴里对不上号。
+    //   统一说时间轴的话。
+    return `${x.name}(P${x.id+1})${r!=='?'?'('+r+')':''}[第${x.deathRound}${x.deathPhase==='night'?'夜':'天白天'}·${causeText}]`;
   }).join(', ');
   const alive = `✅存活(${S.players.filter(x=>x.alive).length}人)：${alivePlayers || '无'}` +
     (deadPlayers ? `\n❌已死亡(不能与死者对话，不能投票给死者)：${deadPlayers}` : '');
@@ -9557,13 +9560,32 @@ ${userPersona}
       serialkiller:'连环杀手袭击', cupid:'爱神连结', wolf:'狼队刀人', wolfbeauty:'狼美人魅惑',
       mechwolf:'机械狼学习', mechwolf_seer:'机械查验', mechwolf_magician:'机械交换',
       mechwolf_guard:'机械守护', mechwolf_poison:'机械毒药', mechwolf_kill:'机械狼刀',
-      soulwarden:'净魂师圣域'
+      soulwarden:'净魂师圣域',
+      // ★ 以下这些 role 值真实存在于 gameRecord，但此前不在白名单里，标题会直接漏出
+      //   英文 id（「[已执行] granted-seer：目标=P5」），读起来像某个与自己无关的系统事件。
+      fox:'子狐媚惑', mechwolf_fox:'机械媚惑', wolfconcubine:'蚀时狼妃反弹锁定',
+      fool:'愚者护盾', dreamwalker:'摄梦', gravekeeper:'守墓人验尸',
+      alchemist:'炼金未明之雾', alchemist_rescue:'炼金救援', gargoyle:'石像鬼窥视',
+      imitator:'摹术学习', imitator_use:'摹术施放', imitator_rescue:'摹术救援',
+      merchant:'奇迹商人赐福', youshang:'游商行动',
+      'granted-seer':'赐予·查验', 'granted-inspect':'赐予·查验', 'granted-poison':'赐予·毒药',
+      'granted-guard':'赐予·守护', 'gift-choice':'赐予·选择礼物',
+      'custom-protect':'自创·守护', 'custom-inspect':'自创·查验', 'custom-poison':'自创·毒杀',
+      'custom-save':'自创·解药', 'custom-mute':'自创·封技', 'custom-reflect':'自创·反弹锁定',
+      'custom-block':'自创·禁刀', 'custom-shield':'自创·护盾', 'custom-grant':'自创·赐予'
     };
-    const title = roleNames[r.role] || r.role || '夜间技能';
+    const title = roleNames[r.role] || (r.role ? `夜间技能(${r.role})` : '夜间技能');
     if (r.technical) return `[技术失败·未执行] ${title}未形成合法行动；这不是主动空过，也没有产生技能结果。`;
     // ★ 被封锁（子狐媚惑、机械狼封技等）不是"主动空过"。旧代码让它落到下面的通用分支，
     //   渲染成「[已执行·空过] …没有选择目标」，和同一份提示词里的封锁记录直接打架。
     if (r.blocked) return `[未执行·被封锁] ${title}：本夜你的技能被封锁，没有作用到任何人，也没有产生任何结果；这不是你主动放弃。`;
+    // ★ skill-muted 记录既没有 blocked 也没有 target，会一路掉到最后的通用分支，
+    //   被渲染成「[已执行·空过] skill-muted：没有选择目标」——也就是"我今晚主动没做"。
+    //   同一份提示词里的【技能封锁结果】块说的却是"被封锁、没有生效"。协议规定时间轴
+    //   优先，模型于是当众自报"我第N夜空守"，一句他根本没资格说的假话。
+    if (r.role === 'skill-muted') {
+      return `[未执行·被封锁] ${r.ability || '夜间主动技能'}被封锁：你当夜确实选了目标，但技能被封锁、没有作用到任何人，也没有产生任何结果。这【不是】主动空过，不要对外说成自己主动放弃。`;
+    }
     if (r.role === 'witch') {
       const acts = [];
       if (r.saved) acts.push('救='+r.saved);
@@ -9579,7 +9601,14 @@ ${userPersona}
     if (r.reflected || r.result === 'rebounded') return `[已执行·被反弹] ${title}：你指向的${r.target != null ? '目标=' + r.target : '目标'}被反弹，原目标没有被作用到${r.actualTarget && r.actualTarget !== r.target ? `，实际落点=${r.actualTarget}` : ''}；不要当成命中。`;
     if (r.role === 'wolfbeauty' && r.attemptedTarget) return `[已执行] ${title}：目标=${r.attemptedTarget}`;
     if (r.target == null || r.target === '无' || r.empty) return `[已执行·空过] ${title}：没有选择目标`;
-    return `[已执行] ${title}：目标=${r.target}`;
+    // ★ 通用分支此前只报目标、丢掉 result：查验类技能于是变成「已执行，目标=P5」却没有
+    //   任何结论，模型倾向于自己补一个出来。
+    const _res = r.result === 'wolf' ? ' → 狼人显示'
+      : r.result === 'good' ? ' → 好人显示'
+      : r.result === 'blockKill' ? ' → 目标属狼阵营，当夜全狼禁刀'
+      : r.result === 'mute' ? ' → 目标当夜的主动技能被封'
+      : (r.roleName ? ' → ' + r.roleName : '');
+    return `[已执行] ${title}：目标=${r.target}${_res}`;
   };
   const _timelineLines = [];
   let _eventSeq = 0;
@@ -9695,6 +9724,14 @@ ${userPersona}
       `判定规则：①“公开/私密发言”只是当事人的说法或未来计划，不证明内容为真，也不代表行动已执行；②只有标成“已发生/已执行”的系统记录才是事实；③“系统自动取消”之后，该死者不可能再行动；④不得用较大E编号的信息评价较小E编号发言者当时是否知情。\n`+
       _timelineLines.join('\n');
   }
+  // ★ 时间轴里约九成字数是发言原文，而每一条硬事实（死亡、票型、计划作废、当前边界）
+  //   都只有一行，和一段 400 字的观点长得一模一样、前缀形状一样、位置也没有区别。
+  //   模型读完形成的印象是"这是一份带标签的聊天记录"，于是按最近性和叙事显著度去检索，
+  //   而不是按标签。这里从【同一个数组】过滤出只含系统结算的子集，不引入任何新信息。
+  const _hardFactLines = _timelineLines.filter(l => !l.includes('·只是提议/声称]'));
+  const hardFactDigest = (_timelineActive && _hardFactLines.length)
+    ? `\n\n【🔒 系统硬事实速查·E编号与上方时间轴一一对应，只列系统结算，不含任何发言】\n${_hardFactLines.join('\n')}\n本表是上方时间轴的严格子集，不是新信息。任何人的说法若与本表冲突，一律以本表为准。`
+    : '';
   const temporalExecutionBlock = !_timelineActive ? '' : `\n\n【⏱️ 权威时间轴判定协议·最高优先级】\n本条提到的“权威事件时间轴”在本提示词的【发言记录】一节（全文最末尾）。\n该时间轴已经把公开发言、系统事件、实际技能与死亡按真实结算顺序统一编号。发言只代表声称或计划；只有标成“已发生/已执行”的系统事件才是事实；角色一旦出现“系统自动取消”，其后续计划全部失效；“当前边界”之后的一切尚未发生。任何推理若与E编号顺序冲突，必须以时间轴为准。`;
   // ★ 提取预言家/女巫等角色的关键信息（不会被memory挤掉）
   // ★ 关键信息：结构化状态直接注入（不依赖memory捞取，防止截断丢失）
@@ -10180,7 +10217,7 @@ ${userPersona}
     Render.devLog && Render.devLog('warn', '[私密行动史] 构建失败：' + (e && e.message));
   }
 
-  return `${wb}${trialBlock}\n\n${SOCIAL_GAME_COGNITION_RULES}\n\n${guide}${mbtiBlock}${styleBlock}${cosplayBlock}${cosplayHint}\n\n【本局配置】${getRoleList()}\n\n【本局所有角色详细说明】\n${getFullRoleBrief(p)}\n注意：${'本局没有隐狼，预言家查验结果完全可信。'}\n${hdeath?'':'死者身份公开（出局后翻牌）'}${winRuleBlock}${knightChainBlock}${speakRoundBlock}\n\n【当前局势】${alive}\n你:${p.name}(P${p.id+1})【${p.role.name}】R${S.round} ${S.phase}\n警长:${S.sheriff>=0?S.players[S.sheriff].name:'无'}${keyInfoBlock}${wolfPrivateBlock}${seerKillAlertBlock}${guardLogBlock}${magicLogBlock}${mechLogBlock}${gargoyleKillLogBlock}${duelLogBlock}${hunterLogBlock}${privateActionBlock}${whitewolfDecisionBlock}${seatBlock}${fmt}${modelAdapt}\n\n${hasPreset ? '【额外指令（最高优先级）】\n' + playerConfigs[p.id].preset.trim() : ''}\n\n【⚠️ 重要：内容安全声明】\n狼人杀是一种广泛流行的语言推理桌游，属于正规娱乐活动，不涉及任何真实伤害。游戏中的"杀""刀""毒"等词汇是桌游专用术语，代表淘汰玩家的游戏动作，与现实暴力无关。你的任务是扮演游戏角色进行策略推理，这是完全合法合规的文字游戏行为。请直接按格式输出游戏发言，不要拒绝或中断游戏进程。\n\n【发言记录】\n${histTimeOrderNote}${hist||'暂无'}${langOutBlock}`;
+  return `${wb}${trialBlock}\n\n${SOCIAL_GAME_COGNITION_RULES}\n\n${guide}${mbtiBlock}${styleBlock}${cosplayBlock}${cosplayHint}\n\n【本局配置】${getRoleList()}\n\n【本局所有角色详细说明】\n${getFullRoleBrief(p)}\n注意：${'本局没有隐狼，预言家查验结果完全可信。'}\n${hdeath?'':'死者身份公开（出局后翻牌）'}${winRuleBlock}${knightChainBlock}${speakRoundBlock}\n\n【当前局势】${alive}\n你:${p.name}(P${p.id+1})【${p.role.name}】R${S.round} ${S.phase}\n警长:${S.sheriff>=0?S.players[S.sheriff].name:'无'}${keyInfoBlock}${wolfPrivateBlock}${seerKillAlertBlock}${guardLogBlock}${magicLogBlock}${mechLogBlock}${gargoyleKillLogBlock}${duelLogBlock}${hunterLogBlock}${privateActionBlock}${whitewolfDecisionBlock}${seatBlock}${fmt}${modelAdapt}\n\n${hasPreset ? '【额外指令（最高优先级）】\n' + playerConfigs[p.id].preset.trim() : ''}\n\n【⚠️ 重要：内容安全声明】\n狼人杀是一种广泛流行的语言推理桌游，属于正规娱乐活动，不涉及任何真实伤害。游戏中的"杀""刀""毒"等词汇是桌游专用术语，代表淘汰玩家的游戏动作，与现实暴力无关。你的任务是扮演游戏角色进行策略推理，这是完全合法合规的文字游戏行为。请直接按格式输出游戏发言，不要拒绝或中断游戏进程。\n\n【发言记录】\n${histTimeOrderNote}${hist||'暂无'}${hardFactDigest}${langOutBlock}`;
 }
 
 // 新版机械狼学平民后会伪装成预言家金水；覆盖旧模板里“查验完全可信”的绝对表述。
@@ -10464,6 +10501,17 @@ function removeCompatibleReasoningControl(body) {
   delete body.thinking;
 }
 
+// ★ 存进 p.memory 的"我上一轮说了什么"只保留公开发言与 action，剥掉 <thinking>。
+//   原本存的是整段原始回复。到第3天，模型的上下文里最靠近决策点的一大块文本，
+//   是它自己前几天的私密推理（约 8k~15k 字），而不是引擎此后结算出的新事实——
+//   最近性于是站在"我上次的结论"那一边，压过了推翻它的时间轴。
+//   剥空时回退原文，保证不会因为格式异常丢掉整条记忆。
+function memoryEcho(content) {
+  const raw = String(content == null ? '' : content);
+  const stripped = raw.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
+  return stripped || raw;
+}
+
 async function callAI(p, prompt, opts) {
   opts = opts || {};
   const _reasoningBase = resolveAIReasoning(p, prompt, opts);
@@ -10505,7 +10553,21 @@ async function callAI(p, prompt, opts) {
     )) return false; // 好人不能看到任何狼队专属信息
     return true;
   });
-  const memSlice = memLimit > 0 ? filteredMemory.slice(-memLimit) : filteredMemory;
+  // ★ 三个问题一起修：
+  //   ① 窗口左边界是无声的。系统提示里给的是【完整】的时间轴（allHist 明确不截断），
+  //      而对话历史却从半局中间开始。模型没有任何信号说"你更早的回合被移出去了"，
+  //      于是把最老的一条当成自己入局的第一步，然后看着时间轴里那些"我没印象"的
+  //      事件，要么断言当时自己没做过，要么凭空补一段。
+  //   ② slice 可能把一对 user/assistant 拦腰切断，让整段对话以 assistant 开头。
+  //      Anthropic Messages API 要求首条必须是 user，请求会被直接拒绝，而 callAI
+  //      的 catch 会把它当成"API 故障"去走 fallback——一个纯粹自找的失败。
+  let memSlice = memLimit > 0 ? filteredMemory.slice(-memLimit) : filteredMemory;
+  const _memDropped = filteredMemory.length - memSlice.length;
+  // 半对开头（孤儿 assistant）会被模型读成"我现在正在主张这个结论"，而它其实是三天前的回答
+  while (memSlice.length && memSlice[0].role === 'assistant') memSlice = memSlice.slice(1);
+  if (_memDropped > 0) {
+    memSlice = [{role:'system', content:`【记忆窗口说明】你更早的 ${_memDropped} 条个人记录（你自己的任务、你自己的回答、系统发给你的私密通知）因记忆上限被移出了本次请求——它们确实发生过，只是这次没带上。系统提示里的【权威事件时间轴】和【发言记录】是完整的，覆盖第1夜到现在：凡是时间轴上有、而你在下面的对话里找不到的事，一律以时间轴为准；不要因为"想不起来"就断言自己当时没做过、没说过或不在场。`}].concat(memSlice);
+  }
 
   // ★ CoT 注入：把玩家自定义的 CoT 模板追加到 prompt 末尾
   //   {{format}} 占位符替换成本轮 prompt 里已有的格式说明（抓 <thinking>/<game>/<action> 的上下文）
@@ -10697,7 +10759,7 @@ async function callAI(p, prompt, opts) {
       }
       clearTimeout(timeoutId);
       const validated = checkFmt(parsed);
-      if (!opts.noMemory) p.memory.push({role:'user',content:prompt,isTaskPrompt:true},{role:'assistant',content:content});
+      if (!opts.noMemory) p.memory.push({role:'user',content:prompt,isTaskPrompt:true},{role:'assistant',content:memoryEcho(content)});
       return validated;
 
     } else if (apiType === 'gemini') {
@@ -10809,7 +10871,7 @@ async function callAI(p, prompt, opts) {
       if (parsed._isLeak) throw new Error('内心戏泄漏到发言');
       clearTimeout(timeoutId);
       const validated = checkFmt(parsed);
-      if (!opts.noMemory) p.memory.push({role:'user',content:prompt,isTaskPrompt:true},{role:'assistant',content:content});
+      if (!opts.noMemory) p.memory.push({role:'user',content:prompt,isTaskPrompt:true},{role:'assistant',content:memoryEcho(content)});
       return validated;
 
     } else {
@@ -11089,7 +11151,7 @@ async function callAI(p, prompt, opts) {
       if (parsed._isLeak) throw new Error('内心戏泄漏到发言');
       clearTimeout(timeoutId);
       const validated = checkFmt(parsed);
-      if (!opts.noMemory) p.memory.push({role:'user',content:prompt,isTaskPrompt:true},{role:'assistant',content:finalContent || parsed.game});
+      if (!opts.noMemory) p.memory.push({role:'user',content:prompt,isTaskPrompt:true},{role:'assistant',content:memoryEcho(finalContent || parsed.game)});
       return validated;
     }
   }
@@ -13159,7 +13221,7 @@ async function proc(players, promptFn, label, opts) {
       if (!opts.silent && r._technicalFailure) {
         const techText = `${p.name}本轮因系统生成/解析故障未产生有效发言；这不是玩家主动沉默，禁止据此判断其身份或阵营。`;
         Render.log('system', `⚠️ ${techText}`);
-        S.history.push({phase:S.phase, name:'【系统技术说明】', text:techText});
+        S.history.push({round:S.round, phase:S.phase, name:'【系统技术说明】', text:techText});
         gameRecord.push({type:'system', round:S.round, phase:S.phase, technical:true, text:techText});
         Render.devLog('warn', `[P${p.id+1} ${p.name}] 技术性发言失败已隔离：未写入玩家发言历史 (${r._technicalReason||'原因未标注'})`);
         continue;
@@ -13919,7 +13981,7 @@ async function wolfStrategyDiscuss(wolves) {
   // 把胜出策略写入所有狼人的 memory（影响后续白天发言/夜晚决策）
   aliveWolves.forEach(w => w.memory.push({
     role: 'system',
-    content: '【狼队主方案·夜谈定】「' + S.wolfStrategyName + '」：' + S.wolfStrategy + '\n\n这是夜谈投票决出的开局主方案，作为你的默认行动指引。但——\n\n【主方案不是死命令，要根据局势评估是否切换】\n开局方案是基于"假设场上局势按预期发展"做的。真实局势会偏离预期，每次发言/决策前在 thinking 里问自己：\n· 主方案的前提条件还成立吗?(比如"压 X 入抗推位"的前提是 X 没自证、没人替他说话——如果场上已经有强好人帮他洗了，前提崩了)\n· 队友状态有变化吗?(有队友死了/被锁死/已经悍跳成功——这些都会改变主方案的执行价值)\n· 继续执行主方案的边际收益还为正吗?还是已经在白送信息?\n\n【什么时候必须切换备用方案】\n· 主方案目标人物已经死了 → 不要再踩他, 浪费发言权\n· 主方案要保的队友已经被锁死无法救 → 转向自保/切割\n· 你自己被推上抗推台 → 主方案让位给生存, 优先回应针对你的指控\n· 出现主方案完全没预料到的变量(真预言家强势、骑士跳、白狼王已爆) → 重新评估\n\n【切换不是背叛队友, 是把活下来的狼救出去】\n死板执行开局方案到死, 是把队友的命和自己的命一起送掉。每个决策点都要重新评估"主方案 vs 当前最优"——能继续执行就执行, 不能就切。'
+    content: '【狼队主方案·第' + S.round + '夜夜谈定】「' + S.wolfStrategyName + '」：' + S.wolfStrategy + '\n\n这是第' + S.round + '夜夜谈投票决出的开局预案，【不是后续任何一天的当前命令】——系统提示里的「狼队密约（第N夜预案，距今N轮）」说的就是这一条，两处是同一份方案，以带日期的那份为准。每次决策前重新比较，别把开局预案当成今天的既定指令。\n\n【主方案不是死命令，要根据局势评估是否切换】\n开局方案是基于"假设场上局势按预期发展"做的。真实局势会偏离预期，每次发言/决策前在 thinking 里问自己：\n· 主方案的前提条件还成立吗?(比如"压 X 入抗推位"的前提是 X 没自证、没人替他说话——如果场上已经有强好人帮他洗了，前提崩了)\n· 队友状态有变化吗?(有队友死了/被锁死/已经悍跳成功——这些都会改变主方案的执行价值)\n· 继续执行主方案的边际收益还为正吗?还是已经在白送信息?\n\n【什么时候必须切换备用方案】\n· 主方案目标人物已经死了 → 不要再踩他, 浪费发言权\n· 主方案要保的队友已经被锁死无法救 → 转向自保/切割\n· 你自己被推上抗推台 → 主方案让位给生存, 优先回应针对你的指控\n· 出现主方案完全没预料到的变量(真预言家强势、骑士跳、白狼王已爆) → 重新评估\n\n【切换不是背叛队友, 是把活下来的狼救出去】\n死板执行开局方案到死, 是把队友的命和自己的命一起送掉。每个决策点都要重新评估"主方案 vs 当前最优"——能继续执行就执行, 不能就切。'
   }));
 
   await waitForWolfStratClose();
@@ -15457,7 +15519,7 @@ const NightActions = {
     }
     if (mode === 'MIST' && mistTargets.length >= 2 && mistTargets.length <= 3) {
       al._mistUsed = true; S.nightData.alchemistMist = mistTargets.map(x=>x.id);
-      al.memory.push({role:'system',content:'【炼金记录】本夜未明之雾已发动，狼刀只能落在：'+mistTargets.map(x=>x.name).join('、')+'。'});
+      al.memory.push({role:'system',content:'【炼金记录】第'+S.round+'夜未明之雾已发动，当夜狼刀只能落在：'+mistTargets.map(x=>x.name).join('、')+'（仅第'+S.round+'夜有效）。'});
       gameRecord.push({type:'night_action',role:'alchemist',round:S.round, casterId:al.id,target:mistTargets.map(x=>x.name).join('、'),targets:mistTargets.map(x=>x.name),result:'mist'});
       logPrivateNightResult(al,'炼金魔女发动未明之雾：'+mistTargets.map(x=>x.name).join('、'),'The Alchemist cast the Nameless Mist around: '+mistTargets.map(x=>x.name).join(', '));
     } else if (mode === 'SERPENT' && !al._serpentUsed) {
@@ -17357,7 +17419,7 @@ ${mistDecisionHint}
     }
     if (t) {
       S.nightData.concubineGuard = t.id;
-      wc.memory.push({role:'system', content:'【反弹·私密】你今晚锁定了'+(t.id===wc.id?'自己':t.name)+'：首个直接指向'+(t.id===wc.id?'你':'他')+'的单体查验、守护、毒杀、媚惑或摄梦会反弹到施术者本人；本夜仅一发，天亮后重置。⚠️只有你知道。'});
+      wc.memory.push({role:'system', content:'【反弹·私密】第'+S.round+'夜你锁定了'+(t.id===wc.id?'自己':t.name)+'：首个直接指向'+(t.id===wc.id?'你':'他')+'的单体查验、守护、毒杀、媚惑或摄梦会反弹到施术者本人；仅第'+S.round+'夜有效、仅一发，天亮后已经重置，这道锁不会延续到之后的任何一夜。⚠️只有你知道。'});
       if (!isAnon()) Render.log('night-result','🌒 蚀时狼妃锁定了'+(t.id===wc.id?'自己':t.name));
       gameRecord.push({type:'night_action', role:'wolfconcubine', round:S.round, casterId:wc.id, target:t.name});
     }
@@ -17396,7 +17458,7 @@ ${mistDecisionHint}
       S.nightData.sanctuaryUsed = false;
       S.nightData.sanctuaryBlocked = null;
       sw._sanctuaryLastTarget = t.id;
-      sw.memory.push({role:'system',content:`【圣域·私密】你今晚把圣域交给了${t.id===sw.id?'自己':t.name}。系统不会告诉你它是否净除或拦截了敌对标记，不能据此编造成功结果。`});
+      sw.memory.push({role:'system',content:`【圣域·私密】第${S.round}夜你把圣域交给了${t.id===sw.id?'自己':t.name}（仅第${S.round}夜有效）。系统不会告诉你它是否净除或拦截了敌对标记，不能据此编造成功结果。`});
       gameRecord.push({type:'night_action',role:'soulwarden',round:S.round,name:sw.name,target:t.name});
       if (S.nightData.concubineGuard === t.id && !S.nightData._concubineTriggered) {
         consumeSanctuaryMark(t.id, 'wolfconcubine');
@@ -17523,13 +17585,13 @@ ${mistDecisionHint}
       }
       if (gift==='shield') {
         p._grantShield = true; p._grantShieldExpire = perm ? Infinity : S.round;   // 游商盾仅当晚
-        p.memory.push({role:'system',content:'【神秘馈赠】你获得【护盾】：'+(perm?'一次挡刀（留到被夜袭时生效）':'今晚若被夜袭挡下一次')+'。⚠️只有你知道。'});
+        p.memory.push({role:'system',content:'【神秘馈赠·第'+S.round+'夜】你获得【护盾】：'+(perm?'一次挡刀（一直留到被夜袭时才生效，不会过期）':'仅第'+S.round+'夜有效——若在第'+S.round+'夜被夜袭可挡下一次，天亮后即失效，之后的夜晚你没有护盾')+'。⚠️只有你知道。'});
       } else if (gift==='inspect' && perm) {
         p._grantedSeer = true; p._grantedSeerReady = S.round+1;                     // 商人永久查验：次夜起每晚可验
         p.memory.push({role:'system',content:'【神秘馈赠】你获得【查验·永久】：从下一个夜晚起，每晚可查验一人阵营。⚠️只有你知道。'});
       } else {
         p._grant = {type:gift, ready: perm ? S.round+1 : S.round, expire: perm ? Infinity : S.round};  // 一次性查验/毒
-        p.memory.push({role:'system',content:'【神秘馈赠】你获得【'+(gift==='inspect'?'查验':'毒药')+'·一次性】（'+(perm?'从下一个夜晚起可用一次':'仅限今晚使用')+'）。⚠️只有你知道。'});
+        p.memory.push({role:'system',content:'【神秘馈赠·第'+S.round+'夜】你获得【'+(gift==='inspect'?'查验':'毒药')+'·一次性】（'+(perm?'从下一个夜晚起可用一次':'仅限第'+S.round+'夜使用，天亮后即失效')+'）。⚠️只有你知道。'});
       }
       // ★ 上帝视角/复盘必须记录幸运儿最终选了什么。
       //   盾是被动技能，没有后续主动行动阶段；若不在这里落盘，导出会永远停在“待其自选”，看起来像赐予没有生效。
@@ -17682,7 +17744,7 @@ ${mistDecisionHint}
           logNightThinking(p, r);
           if (!/^\s*none\s*$/i.test((r.action||'').trim())) t = findPlayer(r.action, others) || (r.thinking && findPlayer(extractSkillTarget(r.thinking, others, 'poison'), others));
         }
-        if (t) { const actualId=reflectEffectTarget(p,t.id,'poison'), actual=S.players[actualId], reflected=actualId!==t.id; S.nightData.customPoison.push(actualId); p._cPoisonUsed = true; p.memory.push({role:'system', content:reflected?'【毒·私密】你本想毒'+t.name+'，但明确得知毒药被反弹到你自己；'+t.name+'没有被这瓶毒命中。⚠️只有你知道。':'【毒·私密】你毒了'+t.name+'，他今晚会受到毒杀结算。⚠️只有你知道。'}); if (!isAnon()) Render.log('night-result',reflected?'🧪 '+p.name+'的毒药被反弹到自己':'🧪 '+p.name+'毒了'+t.name); gameRecord.push({type:'night_action', role:'custom-poison', round:S.round, name:p.name, custom:p.role.name, target:t.name, actualTarget:actual?actual.name:null, reflected}); }
+        if (t) { const actualId=reflectEffectTarget(p,t.id,'poison'), actual=S.players[actualId], reflected=actualId!==t.id; S.nightData.customPoison.push(actualId); p._cPoisonUsed = true; p.memory.push({role:'system', content:reflected?'【毒·私密】你本想毒'+t.name+'，但明确得知毒药被反弹到你自己；'+t.name+'没有被这瓶毒命中。⚠️只有你知道。':'【毒·私密】第'+S.round+'夜你毒了'+t.name+'，他会在第'+S.round+'夜的结算里受到毒杀。⚠️只有你知道。'}); if (!isAnon()) Render.log('night-result',reflected?'🧪 '+p.name+'的毒药被反弹到自己':'🧪 '+p.name+'毒了'+t.name); gameRecord.push({type:'night_action', role:'custom-poison', round:S.round, name:p.name, custom:p.role.name, target:t.name, actualTarget:actual?actual.name:null, reflected}); }
       }
       // 💉 解药（一次性，需看到当晚刀口）
       if (ab.includes('save') && !p._cSaveUsed && S.nightData.kill !== null) {
@@ -17712,7 +17774,7 @@ ${mistDecisionHint}
           logNightThinking(p, r);
           if (!/^\s*none\s*$/i.test((r.action||'').trim())) t = findPlayer(r.action, others) || (r.thinking && findPlayer(extractSkillTarget(r.thinking, others, 'mute'), others));
         }
-        if (t) { if (!S.nightData.foxMuteIds.includes(t.id)) S.nightData.foxMuteIds.push(t.id); if (!S.nightData.skillMuteSources) S.nightData.skillMuteSources = {}; if (!S.nightData.skillMuteSources[t.id]) S.nightData.skillMuteSources[t.id] = 'custom'; p.memory.push({role:'system', content:'【封技能·私密】你封锁了'+t.name+'今晚的夜间主动技。'}); if (!isAnon()) Render.log('night-result','🔇 '+p.name+'封锁了'+t.name+'的技能'); gameRecord.push({type:'night_action', role:'custom-mute', round:S.round, name:p.name, custom:p.role.name, target:t.name}); }
+        if (t) { if (!S.nightData.foxMuteIds.includes(t.id)) S.nightData.foxMuteIds.push(t.id); if (!S.nightData.skillMuteSources) S.nightData.skillMuteSources = {}; if (!S.nightData.skillMuteSources[t.id]) S.nightData.skillMuteSources[t.id] = 'custom'; p.memory.push({role:'system', content:'【封技能·私密】第'+S.round+'夜你封锁了'+t.name+'当夜的夜间主动技（只对第'+S.round+'夜有效）。'}); if (!isAnon()) Render.log('night-result','🔇 '+p.name+'封锁了'+t.name+'的技能'); gameRecord.push({type:'night_action', role:'custom-mute', round:S.round, name:p.name, custom:p.role.name, target:t.name}); }
       }
       // 🌒 反弹（复用蚀时狼妃统一单体技能反弹接口）
       if (ab.includes('reflect')) {
@@ -18140,9 +18202,11 @@ const PhaseHandlers = {
     for (const p of alive) {
       if (_aiCandidateWilling[p.id]) candidates.push(p);
     }
+    let _forcedCandidate = null;
     if (candidates.length === 0) {
       const rp = alive[Math.floor(Math.random() * alive.length)];
       candidates.push(rp);
+      _forcedCandidate = rp.name;
       Render.log('sheriff','😅 无人参选，随机指定 ' + rp.name);
     }
     Render.log('sheriff','🎤 竞选者：' + candidates.map(p => p.name).join('、'));
@@ -18153,13 +18217,18 @@ const PhaseHandlers = {
     const nonCandNames = alive.filter(p => !candidates.some(c => c.id === p.id)).map(p => p.name);
     const electFact = '【警长竞选·参选名单】本轮参选警长的是：' + (candNames.join('、') || '无')
       + '。' + (nonCandNames.length ? '未参选的玩家是：' + nonCandNames.join('、') + '。' : '')
-      + '【重要规则】竞选演讲阶段只有参选者发言，未参选的玩家本来就不发言——这是正常的弃权选择，不是"沉默"或"装死"，绝对不能把"某人没在竞选环节发言"当作怀疑他的理由。';
+      + '【重要规则】竞选演讲阶段只有参选者发言，未参选的玩家本来就不发言——这是正常的弃权选择，不是"沉默"或"装死"，绝对不能把"某人没在竞选环节发言"当作怀疑他的理由。'
+      // ★ 无人参选时系统会随机抓一个人上台。此前记录里只写"警长报名：P6"，等于把一次
+      //   掷骰子的结果写成了 P6 的主动意愿，之后所有"他一个人上警，要么真神要么悍跳"
+      //   的推理都建立在一个不存在的动机上。
+      + (_forcedCandidate ? `【注意】本轮【无人主动报名】，系统随机指定了${_forcedCandidate}作为唯一候选人。${_forcedCandidate}并没有主动上警，绝对不能据此推断他的身份或动机。` : '');
     gameRecord.push({
       type:'sheriff_roster', stage:'signup', round:S.round,
-      candidates:candNames, nonCandidates:nonCandNames,
+      candidates:candNames, nonCandidates:nonCandNames, forcedCandidate:_forcedCandidate,
       text:'警长报名：' + candNames.join('、')
         + (nonCandNames.length ? '；未参选：' + nonCandNames.join('、') : '')
         + '（未参选者在竞选环节本来就不发言，这是正常弃权，不能当作怀疑理由）'
+        + (_forcedCandidate ? `；⚠️本轮无人主动报名，${_forcedCandidate}是系统随机指定的唯一候选人，不是他自己要上警的，不能据此推断身份或动机` : '')
     });
     S._sheriffCandidates = candidates;
     S.players.filter(p => p.alive).forEach(p => p.memory.push({ role: 'system', content: electFact }));
@@ -18243,7 +18312,11 @@ const PhaseHandlers = {
         const hp = alive.find(p => p.isPlayer);
         await waitChoice('退选环节结束，候选人将进行最终陈词' + (hp ? '\n你是：' + hp.name + '【' + hp.role.emoji + hp.role.name + '】' : ''), '👑 最终陈词', [{label:'▶️ 开始陈词', value:'go'}]);
       }
-      const finalSpeechResult = await proc(candidates, p => '【警长最终陈词】退选环节已结束，你成功留在竞选中。这是投票前最后一次发言机会，说清你当警长会怎么做、为什么大家应该投你，并回应其他候选人最关键的竞争观点，做最后争取。\n<thinking>思考策略</thinking>\n<game>最终陈词，直接开口</game>\n<action>None</action>', '最终陈词');
+      // ★ 最终陈词是竞选里最有说服力的一轮，却是唯一既没有「死讯尚未公布」提醒、
+      //   也没有 enforceNightChronology 校验的发言轮。悍跳狼因此可以在这里编一个
+      //   用当天早上的信息解释的首夜行动（"因为他上警，我昨晚才验的他"），而这句话
+      //   会被原样写进权威时间轴，之后的读者当成真实的预言家报点。
+      const finalSpeechResult = await proc(candidates, p => '【第' + S.round + '天·警长最终陈词】⏰ 仍处在天亮后的警长竞选阶段：昨晚的夜间行动已全部结束并成定局，但昨晚谁死了系统还【没有公布】，别提"昨晚谁死了/平安夜"。\n\n【时序硬限制】首夜任何夜间行动的理由只能来自当时已存在的座位、直觉、随机或开局预设，绝不能说"因为他上警/没上警/竞选发言如何，所以我昨晚验他、守他或刀他"——上警名单和竞选发言都是今早才出现的。\n\n退选环节已结束，你成功留在竞选中。这是投票前最后一次发言机会，说清你当警长会怎么做、为什么大家应该投你，并回应其他候选人最关键的竞争观点，做最后争取。\n<thinking>思考策略</thinking>\n<game>最终陈词，直接开口</game>\n<action>None</action>', '最终陈词', {enforceNightChronology:true});
       // ★ 白狼王在最终陈词阶段自爆 → 竞选作废，强制入夜
       if (finalSpeechResult === 'whitewolf_explode' || S._sheriffAbortedByExplode) { if (await _abortSheriffIfExploded()) return; }
 
@@ -18358,7 +18431,7 @@ const PhaseHandlers = {
           Render.log('sheriff','⚖️ 警长选举最高票平票！'+sheriffPkNames+' 进入PK，其他候选人淘汰。');
           const shuffledCands = shuffle(sheriffPkCandidates.slice());
           Render.log('sheriff','📢 随机发言顺序：'+shuffledCands.map(p=>p.name).join('→'));
-          const tieSpeechResult = await proc(shuffledCands, p => '【警长竞选追加发言】⏰ 仍处在天亮后的警长竞选阶段（昨晚死讯尚未公布，别提昨晚谁死）。选举平票了，你还有最后一次机会说服大家投你。', '竞选');
+          const tieSpeechResult = await proc(shuffledCands, p => '【第' + S.round + '天·警长竞选追加发言】⏰ 仍处在天亮后的警长竞选阶段（昨晚死讯尚未公布，别提昨晚谁死）。首夜行动的理由只能来自当时已存在的信息，不能用今早的上警名单或竞选发言去解释昨晚的查验/守护/刀口。选举平票了，你还有最后一次机会说服大家投你。', '竞选', {enforceNightChronology:true});
           // ★ 白狼王在平票追加发言阶段自爆 → 竞选作废，强制入夜
           if (tieSpeechResult === 'whitewolf_explode' || S._sheriffAbortedByExplode) { if (await _abortSheriffIfExploded()) return; }
           // 再投一轮
@@ -23093,7 +23166,13 @@ function _buildPrivateInfoLines(p) {
   if (p.role.id === 'guard' && S.guardLog && S.guardLog.length) {
     const entries = S.guardLog.map(g => `第${g.round}夜：守护${g.target||'空守'}`).join('\n  ');
     const last = S.guardLog[S.guardLog.length-1];
-    lines.push(`你的守护记录：\n  ${entries}\n  ⚠️ 今晚不能再守${last.target||'同一人'}`);
+    // ★ 这里此前无条件输出「今晚不能再守X」，而同一请求里的【🛡️ 守护记录】块在
+    //   上一夜是空守或解析失败时【不输出】任何限制。于是守卫同时读到"今晚不能再守空守"
+    //   （一个找不到的人）和"没有限制"。空守和技术失败都没有连守限制，必须说清楚。
+    const _gLast = (last.target && last.target !== '空守' && !/^技术解析失败/.test(String(last.target))) ? last.target : null;
+    lines.push(`你的守护记录：\n  ${entries}\n  ` + (_gLast
+      ? `⚠️ 今晚不能再守${_gLast}`
+      : `ℹ️ 上一夜没有实际守护任何人（空守或技术失败），今晚【没有】连守限制，任何人都可以守。`));
   }
 
 

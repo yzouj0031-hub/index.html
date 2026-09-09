@@ -215,3 +215,127 @@ for (const file of FILES) {
 }
 
 console.log('timeline integrity: announcement-time labels, dated notices, hard facts at the decision point, teaching and guide escaping passed');
+
+// ── 9. API 路径：记忆窗口的左边界必须可见，且绝不以 assistant 开头 ────────────
+// 系统提示给的是完整时间轴，对话历史却从半局中间开始。模型没有信号说"更早的回合被
+// 移出去了"，于是把最老的一条当成入局第一步。另外 slice 可能把一对 user/assistant
+// 拦腰切断，让整段对话以 assistant 开头——Anthropic Messages API 会直接拒绝该请求。
+for (const file of FILES) {
+  const src = read(file);
+  assert.ok(src.includes('const _memDropped = filteredMemory.length - memSlice.length;'), `${file}: 记忆窗口没有统计被丢弃的条数`);
+  assert.ok(
+    src.includes("while (memSlice.length && memSlice[0].role === 'assistant') memSlice = memSlice.slice(1);"),
+    `${file}: 记忆窗口仍可能以孤儿 assistant 开头`,
+  );
+  assert.match(src, /【记忆窗口说明】你更早的 \$\{_memDropped\} 条个人记录/, `${file}: 没有告诉模型记忆被截断过`);
+  assert.match(src, /不要因为"想不起来"就断言自己当时没做过、没说过或不在场/, `${file}: 缺少"以时间轴为准"的兜底`);
+  assert.ok(!src.includes('const memSlice = memLimit > 0 ? filteredMemory.slice(-memLimit) : filteredMemory;'), `${file}: 旧的裸切片仍在`);
+
+  // 存进记忆的"我上一轮说了什么"不再包含 <thinking>
+  const a = src.indexOf('function memoryEcho(content) {');
+  const b = src.indexOf('\nasync function callAI(', a);
+  assert.ok(a >= 0 && b > a, `${file}: memoryEcho 未找到`);
+  const memoryEcho = vm.runInNewContext(`${src.slice(a, b)}; memoryEcho`, {});
+  assert.equal(
+    memoryEcho('<thinking>我怀疑P5</thinking>\n<game>大家好</game><action>None</action>'),
+    '<game>大家好</game><action>None</action>',
+    `${file}: memoryEcho 没有剥掉 <thinking>`,
+  );
+  assert.equal(memoryEcho('<game>只有发言</game>'), '<game>只有发言</game>', `${file}: memoryEcho 改动了不含思考的回复`);
+  assert.equal(memoryEcho('<thinking>全是思考</thinking>'), '<thinking>全是思考</thinking>', `${file}: 剥空时必须回退原文`);
+  assert.equal(memoryEcho(null), '', `${file}: memoryEcho 对 null 不安全`);
+  for (const m of [
+    "{role:'assistant',content:memoryEcho(content)}",
+    "{role:'assistant',content:memoryEcho(finalContent || parsed.game)}",
+  ]) assert.ok(src.includes(m), `${file}: 仍有路径把原始 <thinking> 存进记忆 → ${m}`);
+}
+
+// ── 10. 私密夜间记录：被封锁不是空过，未知角色不能漏出英文 id ──────────────────
+for (const file of FILES) {
+  const src = read(file);
+  assert.ok(src.includes("if (r.role === 'skill-muted') {"), `${file}: skill-muted 仍会被渲染成"主动空过"`);
+  assert.ok(src.includes("const title = roleNames[r.role] || (r.role ? `夜间技能(${r.role})` : '夜间技能');"), `${file}: 未知角色仍会漏出裸 id`);
+  for (const rn of ["fox:'子狐媚惑'", "'granted-seer':'赐予·查验'", "'custom-inspect':'自创·查验'", "gargoyle:'石像鬼窥视'"]) {
+    assert.ok(src.includes(rn), `${file}: 角色名字典缺少 ${rn}`);
+  }
+  assert.match(src, /const _res = r\.result === 'wolf' \? ' → 狼人显示'/, `${file}: 通用分支仍然吞掉查验结果`);
+}
+
+// ── 11. 同一请求里不能出现两份口径相反的同一份情报 ──────────────────────────
+for (const file of FILES) {
+  const src = read(file);
+  // 狼队主方案：记忆里那份此前无日期、且写成"你的默认行动指引"
+  assert.ok(src.includes("'【狼队主方案·第' + S.round + '夜夜谈定】"), `${file}: 狼队主方案记忆副本仍无日期`);
+  assert.match(src, /【不是后续任何一天的当前命令】/, `${file}: 狼队主方案仍被写成常驻命令`);
+  assert.ok(!src.includes("作为你的默认行动指引。但——"), `${file}: 旧的"默认行动指引"措辞仍在`);
+  // 守卫连守限制：空守/技术失败时两个块必须口径一致
+  assert.ok(
+    src.includes("const _gLast = (last.target && last.target !== '空守' && !/^技术解析失败/.test(String(last.target))) ? last.target : null;"),
+    `${file}: 私密信息块仍会输出"今晚不能再守空守"`,
+  );
+  assert.match(src, /今晚【没有】连守限制/, `${file}: 空守之后没有明确说明无限制`);
+}
+
+// ── 12. 时点必须写进记录，不能靠重建时猜 ────────────────────────────────────
+for (const file of FILES) {
+  const src = read(file);
+  assert.ok(
+    src.includes("S.history.push({round:S.round, phase:S.phase, name:'【系统技术说明】', text:techText});"),
+    `${file}: 【系统技术说明】仍不带 round，会被按当前轮次重新标注`,
+  );
+  // 死者名单说时间轴的话：第2回日 → 第2天白天
+  assert.ok(src.includes("[第${x.deathRound}${x.deathPhase==='night'?'夜':'天白天'}·${causeText}]"), `${file}: 死者名单仍用"第N回日"`);
+  assert.ok(!src.includes("[第${x.deathRound}回${x.deathPhase==='night'?'夜':'日'}"), `${file}: 旧的"第N回日"词汇仍在`);
+}
+
+// ── 13. 竞选：最有说服力的一轮此前没有时序校验 ───────────────────────────────
+for (const file of FILES) {
+  const src = read(file);
+  assert.ok(src.includes("'最终陈词', {enforceNightChronology:true});"), `${file}: 最终陈词仍没有时序校验`);
+  assert.match(src, /第' \+ S\.round \+ '天·警长最终陈词/, `${file}: 最终陈词没有天数`);
+  assert.ok(src.includes("'竞选', {enforceNightChronology:true});"), `${file}: 竞选PK追加发言仍没有时序校验`);
+  // 无人参选时被随机抓上台的人，不能被记录成主动上警
+  assert.ok(src.includes('let _forcedCandidate = null;'), `${file}: 没有标记随机指定的候选人`);
+  assert.ok(src.includes('forcedCandidate:_forcedCandidate,'), `${file}: 记录里没有带上随机指定标记`);
+  assert.match(src, /并没有主动上警，绝对不能据此推断他的身份或动机/, `${file}: 没有说明随机指定不代表动机`);
+}
+
+// ── 14. 一次性夜间效果必须带夜数，否则会累积成好几条同样"今晚"的锁 ─────────────
+for (const file of FILES) {
+  const src = read(file);
+  assert.match(src, /仅第'\+S\.round\+'夜有效、仅一发，天亮后已经重置/, `${file}: 蚀时狼妃的锁仍写成无日期的"今晚"`);
+  assert.match(src, /【圣域·私密】第\$\{S\.round\}夜/, `${file}: 净魂师圣域仍无日期`);
+  assert.match(src, /【神秘馈赠·第'\+S\.round\+'夜】/, `${file}: 神秘馈赠仍无日期`);
+  assert.match(src, /【封技能·私密】第'\+S\.round\+'夜/, `${file}: 自创封技仍无日期`);
+  assert.ok(!src.includes("'【反弹·私密】你今晚锁定了'"), `${file}: 旧的无日期反弹锁仍在`);
+}
+
+// ── 15. 硬事实速查表：时间轴的严格子集，只保留系统结算 ──────────────────────
+for (const file of FILES) {
+  const src = read(file);
+  assert.ok(
+    src.includes("const _hardFactLines = _timelineLines.filter(l => !l.includes('·只是提议/声称]'));"),
+    `${file}: 没有生成只含系统结算的硬事实子集`,
+  );
+  assert.ok(src.includes('${hist||\'暂无\'}${hardFactDigest}${langOutBlock}'), `${file}: 硬事实速查表没有接进提示词`);
+  assert.match(src, /本表是上方时间轴的严格子集，不是新信息/, `${file}: 速查表没有声明自己不是新信息`);
+
+  // 过滤规则必须真的能把发言行剔掉、把系统行留下
+  const keep = [
+    '[E001][开局·发牌][已发生·系统事实] 本局开始',
+    '[E004][第1天·天亮公布][已发生·系统事实] P3出局',
+    '[E009][第2天·白天][系统自动取消] P3已在第2天白天死亡',
+    '[E010][第2天·白天][当前边界] 时间轴到此为止',
+  ];
+  const drop = [
+    '[E002][第1天·警长竞选][公开发言·只是提议/声称] P1：我是预言家',
+    '[E003][第1夜][狼队私密发言·只是提议/声称] P7：刀P2',
+    '[E005][第1天·白天][公开发言·遗言·只是提议/声称] P3：我点P7',
+  ];
+  const filt = (l) => !l.includes('·只是提议/声称]');
+  for (const l of keep) assert.ok(filt(l), `${file}: 硬事实过滤误删了系统行 → ${l}`);
+  for (const l of drop) assert.ok(!filt(l), `${file}: 硬事实过滤漏掉了发言行 → ${l}`);
+}
+
+console.log('API-path integrity: memory window, private night records, single-source intel, sheriff chronology, dated one-shots and hard-fact digest passed');
+
