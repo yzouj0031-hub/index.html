@@ -4279,6 +4279,14 @@ D级：玩家名字、原作人设、面相、单纯“感觉像狼”。不作�
 - 只有C级疑点时，继续从行为和票型中选择概率更高的目标；不要把一个口误包装成“唯一答案”“绝对铁狼”。
 - 把高概率事件当事实来盘（“她八成被刀，先按这个盘”）是正常剪枝、不是狼点。只有当有人把不确定当铁定、据此锁死全部狼坑、且忽略了一个会改变结论的合理分支（例：场上有狼妃时，女巫的死也可能是她毒到了被锁定者、被反弹自尽，而非被狼刀），才值得处理——处理方式是当场纠正那条被漏掉的分支，不是把他当狼投出去。
 
+【被原话推翻的指控，不能继续当共识用】
+典型错误：有人转述"某某把某人从名单里划掉了"，第三个人跟着复述，第四个人直接拿它当投票理由。真去翻原话，那句是"除了某某和我"——根本没有划掉谁。场上有两个人当场把原话摆了出来，可票还是照着那个已经被推翻的版本投了出去。转述在传递中会变形，而变形之后的版本传得比原话快。
+- 转述不是证据，原话才是。任何以"他说过X"为前提的指控，在你跟票之前，必须先在公开记录里找到那句X的原文。找不到原文，这条指控的证据等级是零，不是C级——零的意思是它不能给任何人加一分嫌疑。
+- 一旦原话被摆出来、且和转述对不上，这条指控就【作废】，不是"打个折继续用"。作废之后要做两件事：第一，把建立在它上面的结论一起撤掉（包括你自己已经说出口的）；第二，回头问一句——谁最先把它说成那样的、这么说谁获利。第一个把原话说变形的人，往往比被指控的那个人更值得看。
+- "但他确实还有别的疑点"是最常见的续命方式：指控被证伪之后临时换一条理由继续推同一个人，这叫结论先行。换了理由就等于承认原理由不成立，那么这个人在推人顺位里应当重排，而不是原地不动。
+- 被推翻的指控不会因为"大家已经这么认为了"而复活。一个已经作废的前提被反复复述，只是复述次数变多，证据强度仍然是零。
+- 你自己被这样指控时，把原话贴出来一次就够了，不必反复自证。真正该做的是点名要求转述者说出他的出处——说不出出处，问题就回到他身上了。
+
 【死者的名单：不是圣旨，也不是垃圾】
 典型错误：第一天被投出去的人，遗言点了两个名字。你立刻想起"不能照抄死人的作业"，于是整份名单一笔划掉，转头跟着一个活人今天讲得最顺的连续行为线走。那一刻感觉特别清醒——我没被死人牵着走。可你划掉的，可能是全场唯一一份正确名单；而给你新方向的那个人，正在名单上。
 - "他喊冤"这个动作本身仍然零信息量，这条不变；但一份【点了具体名字的名单】不是喊冤，它是一条能拿台面证据去撞的假设。对假设的正确处理是检验，不是丢弃：如果他说的是真的，今天的票型、昨夜的死法、谁在替谁挡话，能对上几条、对不上几条？只有"撞过、撞不上"才有资格丢。"他死了""他是被投出去的"都不是检验。
@@ -15173,17 +15181,24 @@ async function wolfStrategyDiscuss(wolves) {
 
   // ── 第二步：投票 ──
   Render.log('night-detail', '🐺 投票选择策略…');
-  const stratDisplay = stratList.map((s, i) =>
-    (i+1) + '. ' + s.proposer + '的「' + s.name + '」：' + s.content
-  ).join('\n');
+  // ★ 盲投：此前候选列表直接印着提案人（"某某的「方案名」"），提示词写着"包括你自己的"，
+  //   人类选项上还挂着"（你的）"标签，连解析失败的兜底都是投给自己——四个地方都在教模型
+  //   按"这是谁提的"投票，而不是按"方案好不好"投票。实测一局 4 票里 3 票自投、剩下 1 票
+  //   投给同家族模型，结果最弱的方案（零条件分支、写错技能规则、悍跳位留空）赢了。
+  //   现在：提案人隐去，候选顺序按每个投票人各自打乱，谁也认不出哪条是自己写的。
+  const blindDisplayFor = () => shuffle(stratList.slice())
+    .map((s, i) => (i + 1) + '. 「' + s.name + '」：' + s.content).join('\n');
+  const BLIND_NOTE = '⚠️ 提案人已隐去，候选顺序也是打乱的——其中可能有你自己写的那条，但不要去猜是哪条，猜中了也不加分。'
+    + '只比较方案本身：条件分支是否完整（对方跳身份/出平安夜/有人对跳时分别怎么办）、身份分工有没有落实到具体的人、'
+    + '有没有写错技能规则、失败了有没有退路。写得最像口号的那条通常最不能用。';
 
   const voteResults = {};
   // ★ AI 狼并发投票
   const votePromises = aiWolves.filter(w => aliveWolves.some(x => x.id === w.id)).map(async (w) => {
     try {
       const r = await callAI(w,
-        '【狼盟密约·投票】队友们各自提出了战术方案。从下列方案中选一个你认为最好的（包括你自己的）：\n\n' +
-        stratDisplay + '\n\n' +
+        '【狼盟密约·投票】队友们各自提出了战术方案。从下列方案中选一个你认为最好的：\n\n' +
+        blindDisplayFor() + '\n\n' + BLIND_NOTE + '\n\n' +
         '<thinking>哪个方案对狼队整体最有利？为什么？</thinking>\n' +
         '<game>简短说你投谁、为什么</game>\n' +
         '<action>方案名称（必须从上面方案名中精确选一个，不要写编号）</action>',
@@ -15213,17 +15228,19 @@ async function wolfStrategyDiscuss(wolves) {
   for (const w of humanWolves) {
     if (!aliveWolves.some(x => x.id === w.id)) continue;
     const voteEnglish = !!(window.WolfI18n && WolfI18n.isEnglish && WolfI18n.isEnglish());
+    // 盲化的候选顺序：弹窗正文、选项标签和复制给网页 AI 的提示词共用同一份
+    const _humanBlind = shuffle(stratList.slice());
     const voteRoleName = window.WolfI18n ? WolfI18n.role(w.role.id, w.role).name : w.role.name;
     const voteCtx = voteEnglish ? '🐺 You are ' + w.name + ' [' + w.role.emoji + ' ' + voteRoleName + ']\n\n'
-      + 'Choose the strongest pack strategy below (you may vote for your own):\n\n'
-      + stratList.map((s, i) => (i+1) + '. “' + s.name + '” by ' + s.proposer + '\n   ' + s.content).join('\n\n')
+      + 'Choose the strongest plan below. Proposers are hidden and the order is shuffled — judge the plan, not who wrote it:\n\n'
+      + _humanBlind.map((s, i) => (i+1) + '. “' + s.name + '”\n   ' + s.content).join('\n\n')
       : '🐺 你是 ' + w.name + '【' + w.role.emoji + w.role.name + '】\n\n'
-      + '队友们的战术方案如下，选一个你认为最好的（可以投自己的）：\n\n'
-      + stratList.map((s, i) =>
-          (i+1) + '. ' + s.proposer + '的「' + s.name + '」\n   ' + s.content
+      + '队友们的战术方案如下，选一个你认为最好的（提案人已隐去、顺序已打乱，只看方案本身）：\n\n'
+      + _humanBlind.map((s, i) =>
+          (i+1) + '. 「' + s.name + '」\n   ' + s.content
         ).join('\n\n');
-    const voteOpts = stratList.map(s => ({
-      label: (voteEnglish ? '“' + s.name + '” ' + (s.proposerId === w.id ? '(yours)' : '— ' + s.proposer) : '「' + s.name + '」 ' + (s.proposerId === w.id ? '（你的）' : '— ' + s.proposer)),
+    const voteOpts = _humanBlind.map(s => ({
+      label: (voteEnglish ? '“' + s.name + '”' : '「' + s.name + '」'),
       value: s.name
     }));
     voteOpts.push({label:voteEnglish ? '📋 Copy candidates for Web AI' : '📋 复制方案列表给网页AI（复制后回来选）', value:'__COPY__'});
@@ -15235,11 +15252,13 @@ async function wolfStrategyDiscuss(wolves) {
       if (choice !== '__COPY__') break;
       const rawVotePrompt = voteEnglish ? '[AI WEREWOLF · WOLF PACT VOTE]\n'
         + 'You are playing ' + w.name + ' as ' + voteRoleName + ' on the wolf team. Each wolf independently proposed a strategy. Choose the plan that gives the pack the best overall chance.\n\n'
-        + '[CANDIDATE PLANS]\n' + stratDisplay + '\n\n'
+        + '[CANDIDATE PLANS] (proposers hidden, order shuffled — judge the plan, not the author)\n'
+        + _humanBlind.map((s, i) => (i+1) + '. “' + s.name + '”: ' + s.content).join('\n') + '\n\n'
         + '[OUTPUT]\nOn the first line, write only the exact plan name (not its number). Starting on line two, briefly explain your choice in natural English.'
         : '【AI狼人杀·狼盟密约投票】\n'
         + '你在一局狼人杀中扮演狼人阵营的玩家「' + w.name + '」（身份：' + w.role.name + '）。狼队每人独立提了战术方案，现在要投票选出一个作为狼队行动纲领。\n\n'
-        + '【候选方案】\n' + stratDisplay + '\n\n'
+        + '【候选方案】（提案人已隐去、顺序已打乱）\n'
+        + _humanBlind.map((s, i) => (i+1) + '. 「' + s.name + '」：' + s.content).join('\n') + '\n\n'
         + '【要求】比较各方案对狼队整体的利弊，告诉我你会投哪个方案、为什么。第一行只写你投的【方案名】（精确照抄，不要写编号），从第二行开始写理由。';
       const votePrompt = blindForAI(rawVotePrompt, w);
       try { await navigator.clipboard.writeText(votePrompt); Render.log('system', '📋 投票提示词已复制，去网页端 AI 问完再回来点选方案'); }
@@ -15248,8 +15267,8 @@ async function wolfStrategyDiscuss(wolves) {
     if (choice === '__AI__') {
       try {
         const r = await callAI(w,
-          '【狼盟密约·投票】队友们各自提出了战术方案。从下列方案中选一个你认为最好的（包括你自己的）：\n\n' +
-          stratDisplay + '\n\n' +
+          '【狼盟密约·投票】队友们各自提出了战术方案。从下列方案中选一个你认为最好的：\n\n' +
+          blindDisplayFor() + '\n\n' + BLIND_NOTE + '\n\n' +
           '<thinking>哪个方案对狼队整体最有利？为什么？</thinking>\n' +
           '<game>简短说你投谁、为什么</game>\n' +
           '<action>方案名称（必须从上面方案名中精确选一个，不要写编号）</action>',
@@ -15274,18 +15293,20 @@ async function wolfStrategyDiscuss(wolves) {
   stratList.forEach(s => votes[s.name] = []);
   aliveWolves.forEach(w => {
     const r = voteResults[w.id];
+    // 投不出有效票 → 记弃权。此前的兜底是「默认投自己」，等于把解析失败直接变成一张自投票；
+    // 盲投之下投票人根本不知道哪条是自己的，兜底再投自己就是凭空替他做了一个他没做的选择。
     if (!r || !r.action) {
-      // 投票失败 → 默认投自己（如果自己提案了的话）；否则投第一个
-      const own = stratList.find(s => s.proposerId === w.id);
-      const fallback = own || stratList[0];
-      votes[fallback.name].push(w.name);
+      Render.devLog && Render.devLog('warn', `[狼盟密约] ${w.name} 没有投出有效票，记为弃权`);
       return;
     }
     const actStr = r.action.trim();
     // 在方案名里精确/包含匹配
     const matched = stratList.find(s => actStr === s.name || actStr.includes(s.name) || s.name.includes(actStr));
-    const target = matched || (stratList.find(s => s.proposerId === w.id) || stratList[0]);
-    votes[target.name].push(w.name);
+    if (!matched) {
+      Render.devLog && Render.devLog('warn', `[狼盟密约] ${w.name} 的投票「${actStr.slice(0,40)}」对不上任何方案名，记为弃权`);
+      return;
+    }
+    votes[matched.name].push(w.name);
   });
 
   // 决出胜者（票数最多；平票时按提案顺序最早的）
@@ -17946,11 +17967,34 @@ This instruction has priority over generic advice such as "do not waste the nigh
       const singleWolfHint = isSingleWolf
         ? `\n\n⚠️ 单狼场景：场上只有你一只狼，没有队友讨论。直接给出今晚的决定。\n⚠️ <action> 字段必须填【可刀目标】里完整的玩家名（${ts}），不要简称；【若有明确战术理由要空刀（制造平安夜嫁祸神职/保留刀口/残局博弈），可填 None 表示今晚不刀，但必须在 thinking 里写清目的，不能因纠结/犹豫而空刀】。\n⚠️ 不要在 <game> 文本里写 "<interrupt>" 标签——那是结构化字段，混在自然语言里会导致解析失败。`
         : `\n\n⚠️ <action> 字段必须填【可刀目标】里完整的玩家名（${ts}），不要简称；【若主张空刀（制造平安夜嫁祸神职/保留刀口/残局博弈这类明确战术目的），填 None 并在 thinking 里说清理由；纯因纠结拿不定主意不许空刀，那就正常选目标】。`;
+      // ★ 位置感知：此前这里对【每一只】狼都说"你是第一个发言(队友的开场你还看不到)"——
+      //   4 狼局里有 3 只被告知了假话。于是它们各写各的、谁也接不上谁，写出来的开场
+      //   "看起来一致"；而这个假一致又会让下面的 uniqueTargets.size > 1 判为 false，
+      //   把回声轮整个跳掉，等于狼队一整夜没有真正交流过一次。
+      //   队友的开场本来就已经躺在 openingRecords 里，直接给后发言的人看，不多花一次调用。
+      const _myIdx = speakOrder.indexOf(p);
+      const _priors = speakOrder.slice(0, Math.max(_myIdx, 0))
+        .map(x => ({w: x, rec: openingRecords[x.id]}))
+        .filter(x => x.rec && (x.rec.game || x.rec.action));
+      const priorBlock = _priors.length
+        ? `【队友已经发过的开场】(按实际发言顺序)\n` + _priors.map((x, i) => {
+            const t = x.rec.emptyKill ? '空刀(今晚不刀)' : (x.rec.action || '未明确');
+            return `${i + 1}. ${x.w.name}(${x.w.role.name}) 提议刀：${t}\n   原话：${String(x.rec.game || '').trim() || '(没说出内容)'}`;
+          }).join('\n') + `\n\n`
+        : '';
+      const taskBlock = _priors.length
+        ? `【你的任务】你是第 ${_myIdx + 1} 个发言，上面是队友已经说过的原话。
+① 先明确表态：你同意上面哪一条提议，还是提一个不同的目标——不同意就直接说出来，不要为了合群跟着走；
+② 给出你主张的刀口(具体到名字)和理由(基于推演，不是"感觉他可疑")；
+③ 白天配套战术(如有)。
+⚠️ 真有分歧就说出来：只有出现分歧才会开二轮讨论，那是你们今晚唯一一次能互相回应的机会；装作一致会让这一轮被直接跳过。`
+        : `【你的任务】你是第一个发言(队友的开场你还看不到)，独立给出：
+① 提议刀谁(具体到名字)  ② 理由(基于上面的推演，不是"感觉他可疑")  ③ 白天配套战术(如有)`;
       const prompt = killBlocked ? `【狼队密谈·禁刀夜】这是狼队内部，直接说，不用伪装。
 系统已经确认：本夜全体狼人受到禁刀影响，无法造成狼刀击杀。今晚不需要、也不允许选择刀口；不要浪费时间讨论“刀谁”。
 你的队友:${mates}
 
-请只讨论明天白天的配合：谁负责跳身份或对跳、谁隐藏、优先推动谁、怎样解释即将出现的平安夜，以及如何避免暴露队友。你可以提出具体玩家作为明日施压或拉拢对象，但那不是今晚刀口。
+${priorBlock}请只讨论明天白天的配合：谁负责跳身份或对跳、谁隐藏、优先推动谁、怎样解释即将出现的平安夜，以及如何避免暴露队友。你可以提出具体玩家作为明日施压或拉拢对象，但那不是今晚刀口。
 
 【格式·严格遵守】
 <thinking>分析明天的身份策略、发言分工与票型路线</thinking>
@@ -17963,8 +18007,7 @@ This instruction has priority over generic advice such as "do not waste the nigh
 
 ${buildWolfChoiceHint()}
 
-【你的任务】你是第一个发言(队友的开场你还看不到)，独立给出：
-① 提议刀谁(具体到名字)  ② 理由(基于上面的推演，不是"感觉他可疑")  ③ 白天配套战术(如有)
+${priorBlock}${taskBlock}
 
 【格式·严格遵守】
 <thinking>比较当前可行方案，使用完整结算结果而非未验证假设${magicOpeningThinking}</thinking>
