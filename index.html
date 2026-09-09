@@ -3216,9 +3216,10 @@ body.has-wp::after {
             <option value="medium">中</option>
             <option value="high">高</option>
             <option value="xhigh">极高</option>
+            <option value="max">最高（仅 Claude 系列）</option>
           </select>
         </div>
-        <div style="font-size:0.62em;color:#7068a0;padding:2px 6px 4px;line-height:1.5">智能分流：查验、守护、投票等明确操作用低档，普通发言用中档，狼队密约提案等复杂决策用高档。支持 GPT-5/o 系列、Claude、Gemini、Kimi，并为部分 Qwen/GLM/MiniMax 提供开关控制；模型不支持某档时会降级为其可用档位或撤销参数重试。</div>
+        <div style="font-size:0.62em;color:#7068a0;padding:2px 6px 4px;line-height:1.5">智能分流：查验、守护、投票等明确操作用低档，普通发言用中档，狼队密约提案等复杂决策用高档。支持 GPT-5/o 系列、Claude（含 Fable / Mythos）、Gemini、Grok、DeepSeek、Kimi，并为部分 Qwen/GLM/MiniMax 提供开关控制；“最高”档只有 Claude 系列支持，其余模型会自动降到各自的上限；模型不支持某档时会降级为其可用档位或撤销参数重试。</div>
       </details>
       <div class="cr"><label>名讳</label><input type="text" id="cnames" placeholder="留空随机 | 逗号分隔"></div>
       <div class="nhint">点击命牌可单独设名字和API</div>
@@ -3503,6 +3504,7 @@ body.has-wp::after {
         <option value="medium">中</option>
         <option value="high">高</option>
         <option value="xhigh">极高</option>
+        <option value="max">最高（仅 Claude 系列）</option>
       </select>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;margin-top:8px;font-size:0.75em">
@@ -11472,7 +11474,7 @@ function resolveAIReasoning(p, prompt, opts) {
   });
 }
 // 重试降档：xhigh → high → medium → low。off/auto 不动（本来就没在烧预算）。
-const _REASONING_DOWNGRADE = Object.freeze({xhigh:'high', high:'medium', medium:'low', low:'low'});
+const _REASONING_DOWNGRADE = Object.freeze({max:'xhigh', xhigh:'high', high:'medium', medium:'low', low:'low'});
 function _degradeReasoning(mode, att) {
   let m = mode;
   for (let i = 1; i < att; i++) m = _REASONING_DOWNGRADE[m] || m;
@@ -11492,7 +11494,12 @@ function detectThinkingFlags(modelName, endpointUrl) {
   // Claude 系列。Anthropic 原生参数是 output_config.effort（原生分支已经在发），但走 OpenAI
   // 兼容端点时各家中转的映射不一：多数接受 reasoning_effort 并转译过去，少数原样透传，
   // 少数直接 400。此前这里根本没有 Claude 分支，等于思考强度旋钮对 Claude 全程空转。
-  const isClaudeReasoning = mn.includes('claude') || mn.includes('anthropic');
+  //   模型名不一定带 claude- 前缀：中转常直接暴露成 fable-5-1 / mythos-5-1 / opus-5 /
+  //   sonnet-5，只匹配 'claude' 会把 Fable、Mythos 整族以及裸型号名全都漏掉。
+  //   系列名要求出现在词首或分隔符之后，避免 magnum-opus-72b 这种名字误伤；即使真误判了，
+  //   代价也只是该端点上多付一个 400 往返，之后就被拒绝记忆表挡住。
+  const isClaudeReasoning = /claude|anthropic/.test(mn)
+    || /(?:^|[\/_-])(fable|mythos|opus|sonnet|haiku)(?:[-_.\d]|$)/.test(mn);
   // Qwen 思考模型识别
   //   ① qwen3-*-thinking / qwen-max-thinking 等带显式 thinking 后缀的版本
   //   ② Qwen3.5 / Qwen3.6 系列是混合推理模型，默认就带思考能力（如 Qwen/Qwen3.6-27B），
@@ -11543,9 +11550,14 @@ function applyCompatibleReasoningControl(body, model, reasoning, flags) {
   const mode = reasoning.effective;
   const fields = [];
   if (mode === 'auto') return {applied:false, mode, fields};
-  // OpenAI 兼容端点上通用度最高的档位取值，收敛到 low/medium/high：
-  // off 降到 low（兼容端点上没有可靠的"完全关思考"），xhigh 降到 high（多数网关只认三档）。
-  const compatEffort = mode === 'off' ? 'low' : (mode === 'xhigh' ? 'high' : mode);
+  // 档位取值：off 一律降到 low——兼容端点上没有可靠的"完全关思考"，而且 Fable 5/5.1 与
+  // Mythos 5.1 的思考本来就永远开着、Opus 5 在高档也不接受关闭。
+  // 上限则分家族：Anthropic 侧真支持 xhigh 和 max，砍掉等于白白丢一档；其余家目前只认
+  // low/medium/high，超出的降到 high。
+  const _claudeTier = !!flags.isClaudeReasoning;
+  const compatEffort = mode === 'off'
+    ? 'low'
+    : (_claudeTier ? mode : ((mode === 'xhigh' || mode === 'max') ? 'high' : mode));
 
   if (flags.isKimiK2) {
     body.chat_template_kwargs = Object.assign({}, body.chat_template_kwargs || {}, {thinking: mode !== 'off'});

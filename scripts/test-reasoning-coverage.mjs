@@ -74,6 +74,14 @@ for (const file of FILES) {
   // ── 2. 覆盖面：这些模型都必须真的收到参数 ───────────────────────────────────
   const EXPECT = [
     ['claude-opus-5', { reasoning_effort: 'high' }],
+    // Fable / Mythos，以及中转常见的裸型号名（不带 claude- 前缀）
+    ['claude-fable-5-1', { reasoning_effort: 'high' }],
+    ['fable-5-1', { reasoning_effort: 'high' }],
+    ['fable-5', { reasoning_effort: 'high' }],
+    ['mythos-5-1', { reasoning_effort: 'high' }],
+    ['anthropic/fable-5', { reasoning_effort: 'high' }],
+    ['opus-5', { reasoning_effort: 'high' }],
+    ['sonnet-5', { reasoning_effort: 'high' }],
     ['claude-sonnet-5', { reasoning_effort: 'high' }],
     ['anthropic/claude-opus-5', { reasoning_effort: 'high' }],
     ['gpt-5.1', { reasoning_effort: 'high' }],
@@ -104,7 +112,23 @@ for (const file of FILES) {
   assert.equal(effortOf('low'), 'low', `${file}: low 档位串错`);
   assert.equal(effortOf('medium'), 'medium', `${file}: medium 档位串错`);
   assert.equal(effortOf('high'), 'high', `${file}: high 档位串错`);
-  assert.equal(effortOf('xhigh'), 'high', `${file}: xhigh 应降到 high`);
+  // ★ Anthropic 侧真支持 xhigh / max，砍掉等于白丢一档
+  assert.equal(effortOf('xhigh'), 'xhigh', `${file}: Claude 的 xhigh 不该被降级`);
+  assert.equal(effortOf('max'), 'max', `${file}: Claude 的 max 不该被降级`);
+  // 其余家目前只认三档，超出的降到 high
+  const grokEffort = (mode) => (paramsFor('grok-4-fast-reasoning', mode) || {}).reasoning_effort;
+  assert.equal(grokEffort('xhigh'), 'high', `${file}: 非 Claude 的 xhigh 应降到 high`);
+  assert.equal(grokEffort('max'), 'high', `${file}: 非 Claude 的 max 应降到 high`);
+  assert.equal(grokEffort('off'), 'low', `${file}: off 一律降到 low`);
+
+  // Fable 5/5.1 与 Mythos 5.1 的思考永远开着：off 只能降到最低档，不能试图禁用
+  assert.equal((paramsFor('fable-5-1', 'off') || {}).reasoning_effort, 'low', `${file}: Fable 的 off 应降到 low`);
+
+  // 降级重试表要能从 max 一路降下来
+  assert.ok(
+    src.includes("const _REASONING_DOWNGRADE = Object.freeze({max:'xhigh', xhigh:'high', high:'medium', medium:'low', low:'low'});"),
+    `${file}: 重试降级表没有覆盖 max 档`,
+  );
 
   // ── 5. 端点拒绝记忆：撞过一次 400 就别再撞 ──────────────────────────────────
   assert.equal(ctx.rejected(URL_B, 'claude-opus-5'), false, `${file}: 记忆初始应为空`);
@@ -116,5 +140,22 @@ for (const file of FILES) {
   // 大小写不该造成漏记
   assert.equal(ctx.rejected(URL_B.toUpperCase(), 'CLAUDE-OPUS-5'), true, `${file}: 记忆对大小写不稳定`);
 }
+
+// ── 6. reasoning-control.js 侧的 max 档映射 ────────────────────────────────
+// Anthropic 侧最高档是 max（Fable 5/5.1、Mythos 5.1、Opus 5 都支持）；其他家没有对应
+// 档位，必须降到各自的上限而不是原样发出去。
+assert.ok(RC.MODES.includes('max'), 'reasoning-control.js: MODES 缺少 max 档');
+assert.equal(RC.anthropicEffort('max'), 'max', 'reasoning-control.js: 原生 Anthropic 路径丢了 max');
+assert.equal(RC.anthropicEffort('xhigh'), 'xhigh', 'reasoning-control.js: 原生 Anthropic 路径丢了 xhigh');
+// Fable/Mythos 的思考永远开着，Opus 5 在高档也不接受关闭 —— off 取最低档而不是禁用
+assert.equal(RC.anthropicEffort('off'), 'low', 'reasoning-control.js: off 不该试图禁用 Anthropic 的思考');
+assert.equal(RC.openAIEffort('max', true), 'xhigh', 'reasoning-control.js: GPT-5 的 max 应降到 xhigh');
+assert.equal(RC.openAIEffort('max', false), 'high', 'reasoning-control.js: o系列的 max 应降到 high');
+assert.deepEqual(
+  JSON.parse(JSON.stringify(RC.geminiThinkingConfig('gemini-3-pro', 'max'))),
+  { thinkingLevel: 'high' },
+  'reasoning-control.js: Gemini-3 的 max 应降到 high',
+);
+assert.equal(RC.thinkingBudget('max'), 32768, 'reasoning-control.js: max 档没有 thinking 预算');
 
 console.log('reasoning coverage: single-source family detection, Claude/Grok/DeepSeek-V4/generic wired, effort clamping and per-endpoint rejection memo passed');
