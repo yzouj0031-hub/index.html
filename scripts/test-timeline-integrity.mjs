@@ -384,3 +384,52 @@ for (const file of FILES) {
 
 console.log('API-path integrity: memory window, private night records, single-source intel, sheriff chronology, dated one-shots and hard-fact digest passed');
 
+// ── 16. Anthropic 原生思考：不能丢块，也不能让审议前言混进公开发言 ──────────────
+// Claude 开思考后，真正的推理走 thinking 块。此前这条路径只取【第一个】text 块、
+// 完全忽略 thinking 块，于是：推理被丢弃（思考栏空白、无法带进下一轮）、后续 text 块
+// 里的 <game>/<action> 被截掉、模型不打标签时整段审议直接进了公开发言。
+for (const file of FILES) {
+  const src = read(file);
+
+  // 引擎侧：取全部 text 块 + 交出 thinking 块
+  assert.ok(src.includes("const _anthBlocks = Array.isArray(data.content) ? data.content : [];"), `${file}: Anthropic 响应没有按块解析`);
+  assert.match(src, /_anthBlocks\.filter\(b => b && b\.type === 'text'\)/, `${file}: 仍然只取第一个 text 块`);
+  assert.ok(!src.includes("data.content?.find(b => b.type==='text')?.text"), `${file}: 旧的"只取第一个 text 块"仍在`);
+  assert.match(src, /_anthBlocks\.filter\(b => b && b\.type === 'thinking'\)/, `${file}: Anthropic 的 thinking 块仍被丢弃`);
+  assert.ok(
+    src.includes("if (_anthThought) opts._nativeThinking = _anthThought; else delete opts._nativeThinking;"),
+    `${file}: 原生思考没有交给解析器，或重试之间会残留上一次的思考`,
+  );
+
+  // 解析器侧：段落级剥离审议前言
+  const a = src.indexOf('function parseAI(c, opts)');
+  const b = src.indexOf('// ★ 从 thinking 抢救发言', a);
+  assert.ok(a >= 0 && b > a, `${file}: parseAI 无法隔离`);
+  const sb = { console };
+  vm.runInNewContext(`${src.slice(a, b)}\nthis.parseAI = parseAI;`, sb, { filename: file });
+
+  // 审议前言 + 正式发言 → 只留正式发言
+  const leaked = sb.parseAI('好的，我需要分析一下。P5昨天说验了P3是好人，但今天P3自己也跳了预言家。我的发言应该点出这个矛盾。\n\n各位，P5和P3的预言家对跳，我认为P3更像悍跳，理由是他的警徽流前后不一致。');
+  assert.equal(
+    leaked.game,
+    '各位，P5和P3的预言家对跳，我认为P3更像悍跳，理由是他的警徽流前后不一致。',
+    `${file}: 审议前言仍然混在公开发言里`,
+  );
+  assert.equal(leaked._monologueStripped, true, `${file}: 剥离没有被标记`);
+
+  // 整段都是审议 → 判定为未产出发言，交给上层重试，而不是硬凑一句发出去
+  const allThink = sb.parseAI('我需要先分析一下当前局势。P3和P5对跳。\n\n那么我的发言应该围绕警徽流展开，先不表态。');
+  assert.equal(allThink._isLeak, true, `${file}: 整段审议没有被判定为泄漏`);
+  assert.equal(allThink.game, '', `${file}: 整段审议不该产出发言`);
+
+  // 反向保护①：打了 <game> 标签的正常发言，即使含"我需要分析一下"也不能被剪
+  const tagged = sb.parseAI('<thinking>我怀疑P3</thinking><game>我需要分析一下大家的票型，P3昨天的警徽流我不认可，我投P3。</game><action>None</action>');
+  assert.equal(tagged.game, '我需要分析一下大家的票型，P3昨天的警徽流我不认可，我投P3。', `${file}: 带标签的正常发言被误剪`);
+
+  // 反向保护②：没打标签但整段就是正常发言，多段也不能被剪
+  const bare = sb.parseAI('各位，我今天的判断是P3有问题。他昨天的警徽流和今天说的对不上。\n\n所以我这一票投P3，希望P7能解释一下他为什么跟票。');
+  assert.match(bare.game, /^各位，我今天的判断是P3有问题/, `${file}: 无标签的正常多段发言被误剪`);
+  assert.match(bare.game, /希望P7能解释一下他为什么跟票/, `${file}: 无标签发言的后半段被吃掉`);
+}
+
+console.log('Anthropic native thinking: block harvesting and deliberation-prefix stripping passed');

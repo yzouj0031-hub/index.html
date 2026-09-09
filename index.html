@@ -9271,6 +9271,24 @@ function parseAI(c, opts) {
   //   · 处理方式是"截"不是"吞"：取最后一个协议词之后的内容当发言（模型习惯先想后写，正文在最后）；
   //     截完不成话（太短/没中文）才判沉默——沉默总比把"我别把队友卖了"念出来强。
   //   · 不含任何身份/阵营词，跳神职、报查验、对跳都不会被碰。
+  // ★ 模型在原生思考里想完之后，常常不再打 <thinking> 标签，而是把"我需要分析一下……
+  //   我的发言应该……"这类自述连同正式发言一起交上来。这类输出的形状很稳定：
+  //   前面若干段是审议，最后一段（或几段）才是真正要说的话。
+  //   按【段落】切比按【关键词位置】切安全得多——保留最后一个审议段之后的全部内容，
+  //   不会把正式发言拦腰截断。仅在模型没打 <game> 标签时启用（打了标签就按标签走）。
+  function splitDeliberationPrefix(text) {
+    const t = String(text || '');
+    const paras = t.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
+    if (paras.length < 2) return { game: t, stripped: false, all: false };
+    const NARRATE = /(?:我(?:需要|来|先|应该|得|打算|准备|决定|再)(?:分析|思考|判断|考虑|梳理|盘|捋|说|讲|发言)|我(?:的)?(?:这条|这轮|本轮|今天的)?发言(?:应该|要|需要|就|可以|如下)|那么(?:我)?(?:的)?发言|(?:综上|所以)[，,]?\s*我(?:的)?发言|(?:先|首先)(?:分析|梳理|捋)一下|输出(?:格式|契约)|按(?:照)?(?:要求|格式|契约)|<\s*\/?\s*(?:thinking|game|action)\s*>)/;
+    let start = 0;
+    for (let i = 0; i < paras.length; i++) if (NARRATE.test(paras[i])) start = i + 1;
+    if (start === 0) return { game: t, stripped: false, all: false };
+    // 每一段都是审议 → 这一轮压根没产出正式发言，交给上层重试，别硬凑一句
+    if (start >= paras.length) return { game: '', stripped: true, all: true };
+    return { game: paras.slice(start).join('\n\n'), stripped: true, all: false };
+  }
+
   function stripLeakedMonologue(game) {
     const t = String(game || '');
     if (!t) return { game: t, stripped: false };
@@ -9905,6 +9923,17 @@ function parseAI(c, opts) {
   //   截到崩溃前最后一句正常的，把一整屏乱码收敛成一句干净发言。对任何渠道都有效，因为
   //   它在客户端执行，不依赖服务端尊重 max_tokens。thinking 也一并清（同样会崩）。
   // ★ 协议元语言剥离：模型没打标签、把思考草稿当正文交了 → 只保留最后一个协议词之后的正文
+  // ★ 没有 <game> 标签 = 模型没按契约输出，正文里很可能夹着审议前言。先按段落剥一次。
+  if (game && !/<game>[\s\S]+?<\/game>/i.test(c)) {
+    const _dp = splitDeliberationPrefix(game);
+    if (_dp.stripped) {
+      if (typeof Render !== 'undefined' && Render.devLog) {
+        Render.devLog('warn', `[parseAI] ✂️ 原生思考模式下发言里夹了审议前言${_dp.all ? '（整段都是审议，判定为未产出发言）' : '，已剥到正文'}：“${(_dp.game || '(全段审议)').slice(0, 50)}…”`);
+      }
+      if (_dp.all) { _isLeak = true; game = ''; }
+      else { game = _dp.game; _monologueStripped = true; }
+    }
+  }
   {
     const _ml = stripLeakedMonologue(game);
     if (_ml.stripped) {
@@ -11831,8 +11860,21 @@ async function callAI(p, prompt, opts) {
       }
       if (!res.ok) { const t = await res.text().catch(()=>''); throw new Error('HTTP '+res.status+' '+t.slice(0,100)); }
       const data = await res.json();
-      const content = data.content?.find(b => b.type==='text')?.text || '';
-      if (!content) throw new Error('无有效响应内容');
+      // ★ 两个问题一起修：
+      //   ① 只取【第一个】text 块。Anthropic 会返回多个内容块，开了思考时更是常见
+      //      （thinking → text → text）。后面的 text 块被整段丢掉，<game>/<action>
+      //      可能就在里面，于是表现为"发言被截断"或"只说了半句"。
+      //   ② thinking 块被完全忽略。Gemini/OpenAI 路径都会把原生思考交给 parseAI
+      //      （opts._nativeThinking），Anthropic 路径从来没有——所以 Claude 开思考后，
+      //      它真正的推理被丢弃，思考栏空白，也没有东西可以带进下一轮。
+      const _anthBlocks = Array.isArray(data.content) ? data.content : [];
+      const content = _anthBlocks.filter(b => b && b.type === 'text')
+        .map(b => typeof b.text === 'string' ? b.text : '').filter(Boolean).join('\n').trim();
+      const _anthThought = _anthBlocks.filter(b => b && b.type === 'thinking')
+        .map(b => typeof b.thinking === 'string' ? b.thinking : '').filter(Boolean).join('\n').trim();
+      // 显式设置或清除：opts 在重试之间是复用的，留着上一次的思考会张冠李戴
+      if (_anthThought) opts._nativeThinking = _anthThought; else delete opts._nativeThinking;
+      if (!content) throw new Error(_anthThought ? '思考烧光了输出预算，没有产出正式回复' : '无有效响应内容');
       // ★ fix：检测 Anthropic stop_reason，max_tokens 且回复明显不完整才算截断
       if (data.stop_reason === 'max_tokens') {
         const hasThinkingOpen = content.includes('<thinking>');
