@@ -59,6 +59,8 @@
       enabled: true,
       priority: 95,
       roles: [],
+      // 机械狼与石像鬼和狼队互不相认，这套以"狼队共享刀口与配合"为前提的内容不适用
+      excludeRoles: ['mechwolf', 'gargoyle'],
       teams: ['bad'],
       phases: ['day', 'sheriff', 'vote'],
       content: `【悍跳不是报一句身份，而是一份需要持续履行的合同】
@@ -232,6 +234,7 @@
       content: String(raw.content || raw.prompt || '').trim().slice(0, MAX_CONTENT),
       enabled: raw.enabled !== false && raw.disable !== true,
       roles: listify(raw.roles || raw.role),
+      excludeRoles: listify(raw.excludeRoles || raw.excludeRole),
       teams,
       phases,
       priority: clamp(raw.priority ?? raw.order, 0, 100, 50)
@@ -277,6 +280,10 @@
     const team = String(ctx.team || '');
     const phase = normalizedPhase(ctx.phase);
     if (book.roles.length && !book.roles.includes(roleId)) return false;
+    // ★ 按阵营下发时要能排除个别角色：机械狼、石像鬼虽然 team==='bad'，但与狼队
+    //   互不相认、不参加狼刀，把"狼队知道名义刀口""队友要不要替你站台"这类内容
+    //   发给它们，等于给了它们根本不可能拥有的信息。
+    if (book.excludeRoles.length && book.excludeRoles.includes(roleId)) return false;
     if (book.teams.length && !book.teams.includes(team)) return false;
     if (book.phases.length && !book.phases.includes(phase)) return false;
     return true;

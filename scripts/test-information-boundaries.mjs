@@ -63,7 +63,17 @@ for (const file of ['index.html', 'en/index.html']) {
   assert.equal(ctx.privateActionBelongsTo({type:'night_action',role:'seer'},players[1]),true);
   records.push({type:'night_action',role:'witch',casterId:2,round:2}, {type:'night_action',role:'wolf',round:2,target:'AFTER_ANTIDOTE_SECRET'});
   assert.doesNotMatch(ctx._buildPrivateInfoLines(players[2]).join('\n'),/AFTER_ANTIDOTE_SECRET/);
-  assert.match(ctx._buildPrivateInfoLines(players[2]).join('\n'),/PACK_SECRET/);
+  // 女巫只能看到【她当晚亲眼看到的最终落点】。狼队 night_action 存的是魔术师换位前的
+  // 名义刀口，一旦出现在她的账本里，就等于把魔术师换了哪两个人直接告诉她（她无权知道），
+  // 而且会让账本自相矛盾（狼刀=A 却救=B）。这里的 fixture 正是这种形状：狼记 PACK_SECRET，
+  // 她实际救的是 WITCH_SECRET。
+  assert.doesNotMatch(ctx._buildPrivateInfoLines(players[2]).join('\n'),/PACK_SECRET/);
+  assert.match(ctx._buildPrivateInfoLines(players[2]).join('\n'),/狼刀=WITCH_SECRET/);
+  // seenKill 落库后应当直接用它，且仍然不带出同夜狼队的名义刀口
+  records.push({type:'night_action',role:'witch',casterId:2,round:3,seenKill:'SEEN_BY_WITCH',saved:null},
+               {type:'night_action',role:'wolf',round:3,target:'NOMINAL_ONLY_SECRET'});
+  const witchLines3 = ctx._buildPrivateInfoLines(players[2]).join('\n');
+  assert.doesNotMatch(witchLines3,/NOMINAL_ONLY_SECRET/);
   // Fail closed before any identity list, API prompt or personal export.
   const savedId=players[5].id; players[5].id=0;
   assert.throws(()=>ctx.viewerEventRecords(players[0]), /编号/);
