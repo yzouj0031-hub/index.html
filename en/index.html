@@ -544,6 +544,11 @@ body.fx-lite .role-cinema-panel { animation:none; }
 .av { margin-top: 1px; }
 .rt { min-width: 46px; text-align: center; }   /* 身份固定宽度，性情标签才能对齐成一列 */
 .mbtitag:empty { display: none; }         /* 空的性情标签原来会渲染出一个小色块 */
+/* 预言家查验标记：真人自己验过的人，命牌上直接给一张好人/坏人小牌 */
+.seer-tag { font-size: 0.5em; padding: 1px 5px; border-radius: 3px; display: inline-block; letter-spacing: .08em; margin-top: 1px; font-weight: 600; }
+.seer-tag:empty { display: none; }
+.seer-tag.seer-good { background: rgba(90,180,140,0.18); color: #7ad0a8; border: 1px solid rgba(90,180,140,0.42); }
+.seer-tag.seer-bad  { background: rgba(210,80,80,0.18);  color: #e08888; border: 1px solid rgba(210,80,80,0.42); }
 /* 开着「模型标签」时才给那一行留位：关掉时全场都没有，留了就是白占高度 */
 body.show-modeltag .modeltag-slot:empty { display: block; }
 /* 固定高度而不是 min-height：空槽和有内容的槽在行盒计算上会差 0.1~0.2px 的亚像素，
@@ -3198,6 +3203,7 @@ body.has-wp::after {
         <summary>对局规则<span class="mset-n"></span></summary>
         <div class="mtog">
         <label class="mti" data-ui-icon="mask"><input type="checkbox" id="m-anon" checked>匿名</label>
+        <label class="mti" data-ui-icon="shield" title="真人参与对局时防作弊：其他玩家的身份、AI 内心思考、狼队密谈和夜间私密行动都不会出现在页面上（不是用匿名那样盖住，而是根本不渲染），开局后本开关锁死。对局结束自动解除，想回看完整过程用复盘导出。"><input type="checkbox" id="m-strict">严格模式</label>
         <label class="mti" data-ui-icon="gavel"><input type="checkbox" id="m-trial" checked>审判</label>
         <label class="mti" data-ui-icon="skull"><input type="checkbox" id="m-hdeath">隐死亡</label>
         <label class="mti" data-ui-icon="message" title="遗言规则"><span style="font-size:0.8em;color:#d8d0e8">遗言</span><select id="m-lastwill" style="margin-left:4px;font-size:0.75em;padding:2px 4px;background:rgba(245,160,184,0.06);border:1px solid rgba(245,160,184,0.15);color:#d8d0e8;border-radius:var(--r)"><option value="first">仅第一夜</option><option value="always">每次都有</option><option value="never">从不</option></select></label>
@@ -7951,6 +7957,7 @@ function saveCfg() {
     spd:$('g-spd').value, anon:$('m-anon').checked, trial:$('m-trial').checked,
     hdeath:$('m-hdeath').checked, mbti:$('m-mbti').checked, cosplay:$('m-cosplay').checked, blindNames:$('m-blindnames')?$('m-blindnames').checked:false, hardcore:$('m-hardcore')?$('m-hardcore').checked:false, cnames:$('cnames').value, lastwill:$('m-lastwill')?$('m-lastwill').value:'first', killEdge:$('m-kill-edge')?$('m-kill-edge').checked:false, singleRound:$('m-single-round')?$('m-single-round').checked:false, knightChain:$('m-knight-chain')?$('m-knight-chain').checked:false, sheriffDailyOrder:$('m-sheriff-daily-order')?$('m-sheriff-daily-order').checked:false,
     modeltag:$('m-modeltag')?$('m-modeltag').checked:true,
+    strict:$('m-strict')?$('m-strict').checked:false,
     modeltagFull:$('m-modeltag-full')?$('m-modeltag-full').checked:false,
     thinking:$('m-thinking')?$('m-thinking').checked:true,
     reasoningMode:$('g-reasoning-mode')?$('g-reasoning-mode').value:'smart',
@@ -8018,6 +8025,7 @@ function loadCfg() {
     if (d.blindNames !== undefined && $('m-blindnames')) $('m-blindnames').checked = !!d.blindNames;
     if (d.hardcore !== undefined && $('m-hardcore')) $('m-hardcore').checked = d.hardcore;
     if (d.modeltag !== undefined && $('m-modeltag')) $('m-modeltag').checked = d.modeltag;
+    if (d.strict !== undefined && $('m-strict')) $('m-strict').checked = !!d.strict;
     if (d.modeltagFull !== undefined && $('m-modeltag-full')) $('m-modeltag-full').checked = !!d.modeltagFull;
     if (d.thinking !== undefined && $('m-thinking')) $('m-thinking').checked = d.thinking;
     if ($('g-reasoning-mode')) {
@@ -8115,6 +8123,76 @@ function observerPerspectiveCanSeeRole(p) {
   }
   return false;
 }
+// ★ 严格模式：真人在场时，把「其他人的身份、AI 内心思考、狼队密谈、夜间私密行动」
+//   挡在真人视野之外。和既有「匿名」的区别在于手段：匿名只用 CSS 盖住，内容仍留在
+//   DOM 里，把匿名关掉、或者随手打开开发者工具就全看见了；严格模式直接不把这些节点
+//   放进页面，并且开局后锁住开关，中途改不了。
+//   （这仍然只是客户端防护——整局状态本来就在浏览器内存里，会改 JS 的人总有办法。
+//    它防的是"顺手瞄一眼"和"自己把匿名关掉"，不是防逆向。）
+//   对局结束后自动解除，身份照常翻牌；想回看夜间私密过程用复盘/战报导出，
+//   那条路读的是 gameRecord，不依赖页面上留没留这些节点。
+function humanControlledPlayers() {
+  if (!S || !Array.isArray(S.players)) return [];
+  if (S.directorMode && Array.isArray(S.directorIds) && S.directorIds.length) {
+    return S.directorIds.map(id => S.players[id]).filter(Boolean);
+  }
+  return (S.playerId >= 0 && S.players[S.playerId]) ? [S.players[S.playerId]] : [];
+}
+function strictModeOn() {
+  if (!S || S.pureAI || S.gameOver) return false;   // 纯 AI 观战本来就是给人看的；终局照常翻牌
+  const el = typeof document !== 'undefined' && document.getElementById('m-strict');
+  return !!(el && el.checked) && humanControlledPlayers().length > 0;
+}
+function applyStrictLogGate() {
+  if (!strictModeOn()) return;
+  const viewers = humanControlledPlayers();
+  if (!viewers.length) return;
+  const dropped = new Set();
+  perspectiveLogNodes().forEach(node => {
+    if (!node) return;
+    if (!viewers.some(v => logVisibleToPerspective(node, v))) { dropped.add(node); node.remove(); return; }
+    // 公开发言节点本身可见，但里面挂着的 AI 内心思考只属于说话的人
+    node.querySelectorAll('.log-thought').forEach(t => {
+      const actorId = Number(node.dataset.actorId);
+      if (!viewers.some(v => v.id === actorId)) t.remove();
+    });
+  });
+  // 折叠区里暂存的旧节点也要一起清掉，否则展开折叠又会把私密内容放回页面
+  const folded = $('gl') && $('gl').querySelector('.le-folded');
+  if (folded && Array.isArray(folded._hidden) && dropped.size) {
+    folded._hidden = folded._hidden.filter(n => !dropped.has(n));
+  }
+}
+function syncStrictModeControl() {
+  const el = typeof document !== 'undefined' && document.getElementById('m-strict');
+  if (!el) return;
+  // 开局之后锁死：中途能随手关掉的防作弊开关等于没有
+  const running = !!(S && Array.isArray(S.players) && S.players.length && !S.gameOver);
+  el.disabled = running;
+  const label = el.closest && el.closest('label');
+  if (label) label.style.opacity = running ? '0.6' : '';
+}
+
+// ★ 预言家查验结果标记：真人自己是预言家时，把验过的人直接标在命牌上（好人 / 坏人）。
+//   只读真人自己的查验记录——别人报的查验一律不标，那是声称不是事实；
+//   被反弹的那一次不出结论，因为原目标根本没被验到。
+function humanSeerMark(p) {
+  if (!p || !S || !S.seerLog) return null;
+  const me = humanControlledPlayers().find(v => v && v.role && v.role.id === 'seer');
+  if (!me || me.id === p.id) return null;
+  let mark = null;
+  Object.keys(S.seerLog).forEach(r => {
+    const rec = S.seerLog[r];
+    if (!rec || rec.reflected) return;
+    if ((rec.actualTarget || rec.target) !== p.name) return;
+    const res = String(rec.result || '');
+    if (res.includes('反弹')) return;
+    if (res.includes('狼')) mark = {text:'坏人', cls:'seer-bad'};
+    else if (res.includes('好人')) mark = {text:'好人', cls:'seer-good'};
+  });
+  return mark;
+}
+
 let _activeNightLogVisibility = null;
 function markLogVisibility(node, type, visibility) {
   if (!node) return node;
@@ -8166,7 +8244,9 @@ function refreshObserverPerspectiveControl() {
   if(!wanted.includes(S.observerPerspective))S.observerPerspective='god'; select.value=S.observerPerspective||'god';
 }
 function applyObserverPerspective(refreshCards=true){
-  refreshObserverPerspectiveControl(); const viewer=observerPerspectivePlayer(); const active=!!(S&&S.pureAI&&S.players&&S.players.length);
+  refreshObserverPerspectiveControl();
+  syncStrictModeControl();
+  applyStrictLogGate(); const viewer=observerPerspectivePlayer(); const active=!!(S&&S.pureAI&&S.players&&S.players.length);
   document.body.classList.toggle('observer-ai-view',active&&!!viewer); document.body.classList.toggle('observer-god-view',active&&!viewer);
   perspectiveLogNodes().forEach(node=>{const visible=!viewer||logVisibleToPerspective(node,viewer);node.classList.toggle('perspective-visible',!!viewer&&visible);node.classList.toggle('perspective-hidden',!!viewer&&!visible);node.querySelectorAll('.log-thought').forEach(t=>{t.style.display=!viewer||Number(node.dataset.actorId)===viewer.id?'':'none';});});
   const hint=$('observer-perspective-hint'); if(hint)hint.textContent=viewer?'Following '+viewer.name+' ['+viewer.role.name+']: only information actually available to this AI is shown':'God view: all roles, private meetings and night actions are visible';
@@ -8268,7 +8348,11 @@ const Render = {
     const perspectiveMode = !!(S && S.pureAI && S.players && S.players.length);
     const perspectiveKnown = observerPerspectiveCanSeeRole(p);
     if (perspectiveViewer && !perspectiveKnown && !sd) c.classList.add('perspective-role-hidden');
-    const show = !blindReview && (perspectiveMode ? (perspectiveKnown || sd) : (!ia || p.isPlayer || canSee(p) || sd));
+    // 严格模式下不认「匿名」这个可以随手关掉的开关：除了自己、狼队友和已翻牌的死者，一律不显示身份
+    const strict = strictModeOn();
+    const show = !blindReview && (perspectiveMode
+      ? (perspectiveKnown || sd)
+      : (strict ? (p.isPlayer || canSee(p) || sd) : (!ia || p.isPlayer || canSee(p) || sd)));
     if (show) { const cls = ROLE_CLS[p.role.id]; if(cls) cls.split(' ').forEach(x=>c.classList.add(x)); }
     if (canSee(p)) c.classList.add('stp');
     if (sd) c.classList.add('rev');
@@ -8290,6 +8374,13 @@ const Render = {
     if (pn) pn.textContent = publicPlayerLabel(p);
     const mt = $('mbt-'+p.id);
     if (mt) mt.innerText = (!S.pureAI && p.mbti && $('m-mbti').checked) ? p.mbtiKey : '';
+    // 预言家查验标记：只有真人自己是预言家、且验过这个人时才出现
+    const stg = $('stg-'+p.id);
+    if (stg) {
+      const seerMark = humanSeerMark(p);
+      stg.className = 'seer-tag' + (seerMark ? ' ' + seerMark.cls : '');
+      stg.textContent = seerMark ? seerMark.text : '';
+    }
     // ★ 模型标签（小号，放在命牌里）
     const mts = $('mts-'+p.id);
     if (mts) mts.innerHTML = getModelTagHtml(p, {size:'small'});
@@ -22037,7 +22128,7 @@ function mkCard(i) {
   d.className = 'pc'; d.id = 'p-'+i;
   d.dataset.pid = i;
   d.style.position = 'relative';
-  d.innerHTML = `<div class="ch"><div class="av" id="av-${i}">？</div><div class="pif"><div class="pn" id="pn-${i}">${blindNamesOn()?'P'+(i+1):(curNames[i]||'P'+(i+1))}</div><div class="ptag">P${i+1}</div><div class="modeltag-slot" id="mts-${i}"></div><div class="rt" id="rt-${i}">未知</div><div class="mbtitag" id="mbt-${i}"></div></div></div><button class="dir-btn" id="dir-${i}" style="display:none" title="导演控制">🎬</button>`;
+  d.innerHTML = `<div class="ch"><div class="av" id="av-${i}">？</div><div class="pif"><div class="pn" id="pn-${i}">${blindNamesOn()?'P'+(i+1):(curNames[i]||'P'+(i+1))}</div><div class="ptag">P${i+1}</div><div class="modeltag-slot" id="mts-${i}"></div><div class="rt" id="rt-${i}">未知</div><div class="seer-tag" id="stg-${i}"></div><div class="mbtitag" id="mbt-${i}"></div></div></div><button class="dir-btn" id="dir-${i}" style="display:none" title="导演控制">🎬</button>`;
   // 导演按钮点击：切换该角色是否由导演控制
   const btn = d.querySelector('.dir-btn');
   btn.addEventListener('click', e => {
