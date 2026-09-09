@@ -12193,7 +12193,14 @@ async function callAI(p, prompt, opts) {
         onDelta: _live ? (d => _live.push(d)) : null
       });
       if (_live) _live.end();
-      const content = data.choices?.[0]?.message?.content;
+      // ★ 部分中转把 Claude/Gemini 的分块响应原样透传，content 会是
+      //   [{type:'text',text:'…'}, …] 而不是字符串。后面所有 .includes('<game>')
+      //   之类的检查在数组上都会静默失效（数组的 includes 比的是元素相等），
+      //   finalContent.length 还会变成"块数"，截断判定跟着一起错。先归一化成字符串。
+      const _rawContent = data.choices?.[0]?.message?.content;
+      const content = Array.isArray(_rawContent)
+        ? _rawContent.map(b => typeof b === 'string' ? b : (b && (b.text || b.content)) || '').filter(Boolean).join('\n')
+        : (_rawContent && typeof _rawContent === 'object' ? (_rawContent.text || _rawContent.content || '') : _rawContent);
       // ★ v9.5.1: 兼容三种 thinking 字段命名
       //   - reasoning_content: 大部分 thinking 模型(GLM-5.1 / DeepSeek-R1 / 老版 Kimi K2)
       //   - reasoning: Kimi K2.6 改名后的字段(2026/04 起)
@@ -12266,6 +12273,13 @@ async function callAI(p, prompt, opts) {
           Render.devLog('warn', `[P${p.id+1}] ⚠️ input token 过大(${inT})且因长度截断，记忆压缩可能未生效或阈值过高`);
         }
       }
+      // ★ 把原生思考交给解析器，而不是等 parseAI 跑完再往结果上贴。
+      //   Gemini 路径一直这么做（opts._nativeThinking），OpenAI 兼容路径从来没有，
+      //   于是 parseAI 全程不知道"思考已经被 API 隔离过了"：
+      //   ① 模型没打 <thinking> 标签时，思考区拿不到内容；
+      //   ② content 里没套 <game> 标签的纯发言，走不到原生隔离的兜底提取。
+      //   只在真的拿到原生思考时才设置——拿不到时保持原样，让既有的启发式检查继续生效。
+      if (nativeThinking) opts._nativeThinking = nativeThinking; else delete opts._nativeThinking;
       const parsed = parseAI(finalContent, opts);
       if (!parsed.thinking && nativeThinking) parsed.thinking = nativeThinking;
       // ★ fix: GPT-5.5等模型content为null/空game时，从nativeThinking里捞action和game

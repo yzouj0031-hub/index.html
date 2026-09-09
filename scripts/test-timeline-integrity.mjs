@@ -432,4 +432,62 @@ for (const file of FILES) {
   assert.match(bare.game, /希望P7能解释一下他为什么跟票/, `${file}: 无标签发言的后半段被吃掉`);
 }
 
-console.log('Anthropic native thinking: block harvesting and deliberation-prefix stripping passed');
+// ── 17. OpenAI 兼容路径：同一类问题的对应修复（这条路径最常用）──────────────────
+// 走 OpenAI 兼容端点时，Claude/Gemini 的分块响应可能被中转原样透传，content 会是
+// 数组而不是字符串；而原生思考此前也从来没交给 parseAI（只有 Gemini 路径有）。
+for (const file of FILES) {
+  const src = read(file);
+
+  // content 归一化：数组分块 / 对象 / 字符串 / null 都要能吃
+  assert.ok(src.includes('const _rawContent = data.choices?.[0]?.message?.content;'), `${file}: OpenAI 路径没有归一化 content`);
+  assert.ok(!src.includes('const content = data.choices?.[0]?.message?.content;'), `${file}: 旧的未归一化取值仍在`);
+  const norm = (raw) => Array.isArray(raw)
+    ? raw.map((b) => (typeof b === 'string' ? b : (b && (b.text || b.content)) || '')).filter(Boolean).join('\n')
+    : (raw && typeof raw === 'object' ? (raw.text || raw.content || '') : raw);
+  assert.equal(
+    norm([{ type: 'text', text: '<game>甲</game>' }, { type: 'text', text: '<action>None</action>' }]),
+    '<game>甲</game>\n<action>None</action>',
+    `${file}: 分块 content 没有被拼回字符串`,
+  );
+  assert.equal(norm('<game>乙</game>'), '<game>乙</game>', `${file}: 普通字符串 content 被改坏`);
+  assert.equal(norm({ text: '<game>丙</game>' }), '<game>丙</game>', `${file}: 对象形式的 content 没有取出正文`);
+  assert.equal(norm(null) || '', '', `${file}: 空 content 归一化不安全`);
+
+  // 原生思考必须在 parseAI 之前交给解析器，且拿不到时要清掉（重试之间会复用 opts）
+  assert.ok(
+    src.includes('if (nativeThinking) opts._nativeThinking = nativeThinking; else delete opts._nativeThinking;'),
+    `${file}: OpenAI 路径仍然没把原生思考交给 parseAI`,
+  );
+  const wireAt = src.indexOf('if (nativeThinking) opts._nativeThinking = nativeThinking;');
+  const parseAt = src.indexOf('const parsed = parseAI(finalContent, opts);', wireAt);
+  assert.ok(wireAt >= 0 && parseAt > wireAt, `${file}: 原生思考的交接必须发生在 parseAI 之前`);
+}
+
+// ── 18. 用户实际跑的场景：思考被隐藏时，审议前言不能进公开发言 ──────────────────
+// Claude 5 走 OpenAI 兼容端点、思考不回传时，模型在原生思考里想完就不打标签了，
+// 把"我需要分析一下……我的发言应该……"连同正式发言一起交上来。
+for (const file of FILES) {
+  const src = read(file);
+  const a = src.indexOf('function parseAI(c, opts)');
+  const b = src.indexOf('// ★ 从 thinking 抢救发言', a);
+  const sb = { console };
+  vm.runInNewContext(`${src.slice(a, b)}\nthis.parseAI = parseAI;`, sb, { filename: file });
+
+  const LEAK = '好的，我需要分析一下。P5昨天说验了P3是好人，但今天P3也跳了预言家。我的发言应该点出这个矛盾。\n\n各位，P5和P3的对跳，我认为P3更像悍跳，理由是警徽流前后不一致。';
+  const SPEECH = '各位，P5和P3的对跳，我认为P3更像悍跳，理由是警徽流前后不一致。';
+
+  // 思考被隐藏（nativeThinking 为空）
+  assert.equal(sb.parseAI(LEAK).game, SPEECH, `${file}: 思考被隐藏时审议前言仍混进发言`);
+  // 思考有回传（_nativeThinking 已设置）——同样要剥掉，且思考区要拿到内容
+  const withThink = sb.parseAI(LEAK, { _nativeThinking: '原生推理内容' });
+  assert.equal(withThink.game, SPEECH, `${file}: 有原生思考时审议前言仍混进发言`);
+  assert.equal(withThink.thinking, '原生推理内容', `${file}: 原生思考没有进入思考区`);
+  // 反向保护：无标签的纯发言 + 有原生思考，不能被剪
+  assert.equal(
+    sb.parseAI('各位，我投P3，他的警徽流对不上。', { _nativeThinking: '原生推理' }).game,
+    '各位，我投P3，他的警徽流对不上。',
+    `${file}: 无标签的正常短发言被误剪`,
+  );
+}
+
+console.log('Native thinking across providers: Anthropic block harvesting, OpenAI-compatible normalisation/wiring and deliberation-prefix stripping passed');
