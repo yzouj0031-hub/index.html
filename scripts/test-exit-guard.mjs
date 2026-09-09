@@ -30,4 +30,26 @@ has(css,'.wg-exit-guard.show','custom confirmation visibility');
 has(css,'touch-action:none','gesture blocking while confirmation is open');
 for (const asset of ["'exit-guard.js'","'exit-guard.css'"]) has(build,asset,`packaged asset ${asset}`);
 
-console.log('exit guard: live matches, replay, group chat, mystery and online room are protected');
+// Reload safety is stricter than ordinary exit: save failure/throw cannot be swallowed.
+const sandbox = {
+  document:{documentElement:{lang:'en'},readyState:'loading',addEventListener(){}},
+  location:{pathname:'/'},setInterval(){},
+  Capacitor:{isNativePlatform:()=>true},addEventListener(){}
+};
+sandbox.window=sandbox;
+vm.createContext(sandbox);vm.runInContext(guard,sandbox);
+const api=sandbox.WolfExitGuard;
+let active=true, saves=0;
+const unregister=api.register('test',{isActive:()=>active,beforeUpdate:()=>{saves++;return true;}});
+if(api.prepareUpdate()!==false || saves!==0)throw new Error('Active sessions cannot reload');
+active=false;
+if(api.prepareUpdate()!==true || saves!==1)throw new Error('Idle reload must save before activation');
+unregister();
+const remove=api.register('save-fails',{isActive:()=>false,beforeUpdate:()=>false});
+if(api.prepareUpdate()!==false)throw new Error('Failed save must block update');
+remove();
+api.register('broken',{isActive:()=>{throw new Error('broken provider');}});
+if(api.isActive()!==true)throw new Error('Broken provider must fail closed');
+let threw=false;try{api.prepareUpdate();}catch(e){threw=true;}
+if(!threw)throw new Error('Preparation must expose safety failures');
+console.log('exit guard: modes protected; updates block active sessions and failed saves');

@@ -133,5 +133,18 @@
   else { installUI(); installNativeBackGuard(); }
   setInterval(refresh,1000);
 
-  window.WolfExitGuard = {register,refresh,save,showPrompt,isActive:() => activeProviders().length > 0};
+  // Update reloads are stricter than ordinary exit: never swallow a failed save,
+  // never end a live room/chat/match, and fail closed on a broken provider.
+  function prepareUpdate() {
+    const items = [...providers.values()];
+    if (items.some(item => item.isActive?.())) return false;
+    for (const item of items) {
+      if (item.beforeUpdate && item.beforeUpdate() !== true) return false;
+    }
+    return true;
+  }
+  window.WolfExitGuard = {register,refresh,save,showPrompt,prepareUpdate,isActive:() => {
+    try { return [...providers.values()].some(item => item.isActive?.()); }
+    catch (_) { return true; }
+  }};
 })();

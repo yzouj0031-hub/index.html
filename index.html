@@ -8139,6 +8139,11 @@ const AutoSave = (() => {
  *  § Supabase 登录与云存档
  * ================================================================ */
 window.WolfExitGuard?.register('werewolf-game', {
+  beforeUpdate:() => {
+    if (!S || !S.players?.length || !S.phase || S.phase === 'waiting') return true;
+    if (S.running || !S.gameOver) return false;
+    return AutoSave.save('应用更新', true) === true;
+  },
   label:'狼人杀对局',
   isActive:() => !!(S && Array.isArray(S.players) && S.players.length && S.phase && S.phase !== 'waiting' && !S.gameOver),
   save:() => AutoSave.save('退出保护', true),
