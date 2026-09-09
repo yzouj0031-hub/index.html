@@ -527,9 +527,9 @@ body.fx-lite .role-cinema-panel { animation:none; }
 .pn { font-family: var(--font-title); font-weight: 700; font-size: 0.8em; color: #f0e8ff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ptag { font-size: 0.55em; color: #6860a0; }
 .rt { font-size: 0.6em; padding: 1px 4px; border-radius: 3px; display: inline-block; background: rgba(245,160,184,0.06); color: #a898c0; }
-/* 性情标签原来是「🏛️INTJ」，emoji 不携带信息（没人知道 🏛️ 是 INTJ），
-   删掉后只剩四字母码，做成小号字母牌的样子反而更清楚也更统一。 */
-.mbtitag { font-size: 0.5em; padding: 1px 5px; border-radius: 3px; background: rgba(136,128,200,0.12); color: #a898c8; display: inline-block; letter-spacing: .07em; font-variant-numeric: tabular-nums; }
+/* 性情标签只显示人格名（如「急先锋」），不带 emoji——emoji 不携带信息。
+   人格名是中文、比原来的四字母码宽，所以补了 max-width + 省略号兜底。 */
+.mbtitag { font-size: 0.5em; padding: 1px 5px; border-radius: 3px; background: rgba(136,128,200,0.12); color: #a898c8; display: inline-block; letter-spacing: .07em; font-variant-numeric: tabular-nums; max-width: 7em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
 /* ★ 命牌里的模型标签槽：放在名字下方，不挤屏幕 */
 .modeltag-slot { font-size: 0.55em; line-height: 1.3; margin: 1px 0; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .modeltag-slot:empty { display: none; }
@@ -3938,23 +3938,36 @@ const uiEnglish = () => !!(window.WolfI18n && WolfI18n.isEnglish && WolfI18n.isE
 /* ================================================================
  *  § 1. MBTI 数据
  * ================================================================ */
-const MBTI_ALL = {
-  INTJ:{name:'INTJ',emoji:'🏛️',desc:'建筑师：富有想象力的战略思考者，一切皆在计划之中。',pos:'战略眼光极佳，善于制定长远计划，洞察力强',neg:'过于自信甚至傲慢，对他人缺乏耐心，情感表达困难'},
-  INTP:{name:'INTP',emoji:'🔬',desc:'逻辑学家：具有创造力的发明家，对知识有着不可遏制的渴望。',pos:'逻辑思维极强，善于发现矛盾和漏洞，分析问题深入透彻',neg:'优柔寡断容易纠结，社交被动不善表达，容易钻牛角尖'},
-  ENTJ:{name:'ENTJ',emoji:'👑',desc:'指挥官：大胆、富有想象力且意志强大的领导者。',pos:'组织领导能力强，果断高效，善于制定策略',neg:'控制欲强不容反对，对下属要求苛刻，缺乏同理心'},
-  ENTP:{name:'ENTP',emoji:'🗣️',desc:'辩论家：聪明好奇的思想者，不会放弃任何智力上的挑战。',pos:'思维敏捷反应快，善于从多角度质疑和辩论',neg:'爱唱反调为辩而辩，说话尖锐刻薄，三分钟热度'},
-  INFJ:{name:'INFJ',emoji:'🌊',desc:'提倡者：安静而神秘，拥有强烈的直觉和深刻的洞察力。',pos:'直觉极其敏锐，能感受到他人隐藏的情绪和动机',neg:'过于理想化容易失望，容易把事情往坏处想'},
-  INFP:{name:'INFP',emoji:'🦄',desc:'调停者：诗意、善良的利他主义者，有着强烈的价值观。',pos:'极强的同理心和道德感，能识别虚伪和不真诚',neg:'过于情绪化容易被煽动，在压力下犹豫不决'},
-  ENFJ:{name:'ENFJ',emoji:'🌟',desc:'主人公：富有魅力鼓舞人心的领导者，温暖真诚。',pos:'极强的感染力和号召力，善于团结不同的人',neg:'过于在意他人评价，不敢正面冲突导致立场模糊'},
-  ENFP:{name:'ENFP',emoji:'🦋',desc:'竞选者：热情、有创造力、善于社交的自由精神。',pos:'想象力丰富善于联想，热情有感染力',neg:'注意力容易分散，冲动行事缺乏深思'},
-  ISTJ:{name:'ISTJ',emoji:'📋',desc:'物流师：务实且注重事实的个人，其可靠性不容置疑。',pos:'极其可靠和负责，做事有条理重视证据和事实',neg:'过于死板教条，难以接受新观点和变化'},
-  ISFJ:{name:'ISFJ',emoji:'🛡️',desc:'守卫者：非常专注且温暖的守护者。',pos:'细心观察能记住大量细节，忠诚可靠乐于助人',neg:'过于保守害怕改变，容易被强势的人带偏立场'},
-  ESTJ:{name:'ESTJ',emoji:'⚖️',desc:'总经理：出色的管理者，直率坦诚。',pos:'执行力极强，直率坦诚不拐弯抹角',neg:'独断专行不听意见，过于强势压迫感强'},
-  ESFJ:{name:'ESFJ',emoji:'🤝',desc:'执政官：极有爱心、善于社交且受欢迎的人。',pos:'善于调和矛盾维护团队和谐，社交能力出众',neg:'过于在意社交压力容易随大流，缺乏独立判断'},
-  ISTP:{name:'ISTP',emoji:'🔧',desc:'鉴赏家：大胆而实际的实验家，冷静沉着。',pos:'极其冷静理性，关键时刻果断行动',neg:'平时过于沉默寡言，让人难以信任和了解'},
-  ISFP:{name:'ISFP',emoji:'🎨',desc:'探险家：灵活有魅力的艺术家，温柔敏感。',pos:'洞察力强善于观察，不树敌与人为善',neg:'过于随和导致没有明确立场，容易被忽视'},
-  ESTP:{name:'ESTP',emoji:'🏄',desc:'企业家：精力充沛，善于察言观色。',pos:'反应极其迅速，察言观色能力一流',neg:'冲动鲁莽不经深思就行动，好胜心强'},
-  ESFP:{name:'ESFP',emoji:'🎭',desc:'表演者：自发的、精力充沛且热情的表演者。',pos:'善于活跃气氛打破僵局，观察力敏锐',neg:'不够严肃发言容易浮夸，难以进行深入的逻辑分析'}
+// ★ 牌桌人格（取代原来的 MBTI 表）
+//   为什么换掉 MBTI：MBTI 是人格心理学框架，它天生要对【能力】下判断。旧表 16 型里有 8 型的
+//   neg 直接是推理能力或独立判断的自我否定——"难以进行深入的逻辑分析""缺乏独立判断"
+//   "容易被煽动""不经深思就行动"。12 人局平均有 6 个人被发到这类描述，等于开局就给一半
+//   玩家写好了送人头的剧本；而"逻辑思维极强"这种 pos 对模型又没有任何增益，纯属噪声。
+//   新表只在【怎么说话】和【什么时候下注】上做区分——这两个维度跟"算得清不清楚"正交：
+//   急脾气可以算得很准，他只是选择早下注；慢性子也可以很强，他只是等票型出来再动手。
+//   硬性约定（有测试守着）：cost 只能写"这种打法要付的代价"，绝不能写成能力短板。
+//   字段沿用 desc/habit/cost；玩家身上仍存 p.mbti / p.mbtiKey，是为了不破坏既有存档格式。
+const TABLE_PERSONAS = {
+  急先锋:{name:'急先锋',emoji:'⚡',desc:'第一轮就敢把话说死的人。',habit:'早早给出明确票意和点名对象，不爱说"再看看"。',cost:'话说太满，后面拿到新证据改口时容易被人揪着"你前后不一"。'},
+  磨刀人:{name:'磨刀人',emoji:'🪨',desc:'前期少说，等票型出来再动手。',habit:'爱追问细节，翻别人前几轮的原话对账。',cost:'开口晚容易被当成在混，也可能错过带节奏的窗口。'},
+  抬杠王:{name:'抬杠王',emoji:'🌶️',desc:'听到任何结论都先反着想一遍。',habit:'专挑别人论据里的漏洞，说话直、不留情面。',cost:'得罪人，容易被当成攻击性强的狼。'},
+  和事佬:{name:'和事佬',emoji:'🕊️',desc:'不爱把人往死里踩。',habit:'习惯给台阶、留分支，常说"我先不排除他"。',cost:'立场被人看不清，关键轮次容易被质疑摇摆。'},
+  账房:{name:'账房',emoji:'🧮',desc:'开口就算账的人。',habit:'讲人数、讲收益、讲票型，很少谈感觉。',cost:'语气冷，不容易跟人建立信任，也不容易被人替你说话。'},
+  说书人:{name:'说书人',emoji:'📖',desc:'爱把复杂的场上关系讲成故事。',habit:'用生活化的比喻讲局势，让别人一听就懂。',cost:'故事讲顺了，有时会为了讲得圆而绕开不合拍的细节。'},
+  老油条:{name:'老油条',emoji:'🚬',desc:'见得多，什么局面都"见过"。',habit:'爱拿以前的局做类比，语气笃定。',cost:'类比不一定成立，容易把这一局硬套进旧模板。'},
+  闷炮:{name:'闷炮',emoji:'🧨',desc:'平时话少，一开口就是重锤。',habit:'攒着信息，挑关键节点一次性放出来。',cost:'放晚了可能已经没人听得进去，票型也已经定了。'},
+  追问机:{name:'追问机',emoji:'❓',desc:'不急着自己下结论，喜欢逼别人给答案。',habit:'一轮盯一个人问，问到对方给出具体依据为止。',cost:'自己的立场一直不亮，容易被人说"只提问不站队"。'},
+  老好人:{name:'老好人',emoji:'🤗',desc:'谁被围攻就想先拉一把。',habit:'先替被推的人找一个好人解释，再决定跟不跟票。',cost:'替人找解释要占掉一轮，万一他真是狼，你等于替他挡了一轮票。'},
+  打铁匠:{name:'打铁匠',emoji:'🔨',desc:'认准一个人就咬到底。',habit:'连续几轮盯同一个目标，把证据一层层堆上去。',cost:'转向慢，目标一开始就选错的话会一路错下去。'},
+  墙头草:{name:'墙头草',emoji:'🎐',desc:'谁说得有理就跟谁，不觉得改口丢人。',habit:'坦然承认被说服，改票不扭捏，还会说明是被哪句话说服的。',cost:'改口频繁，别人很难从你的票看出你自己那条线，你的表态也就失去分量。'},
+  冷面客:{name:'冷面客',emoji:'🧊',desc:'情绪几乎不外露。',habit:'陈述式短句，不解释动机，不回应挑衅。',cost:'什么都不解释，容易被当成心里有鬼。'},
+  话痨:{name:'话痨',emoji:'💬',desc:'想到什么说什么，藏不住话。',habit:'一口气把想到的所有可能性都摆出来。',cost:'重点被自己淹没，别人抓不到你真正的结论是哪一条。'},
+  记仇者:{name:'记仇者',emoji:'📌',desc:'谁踩过我，我记着。',habit:'爱翻旧账，把某人前后几轮的态度串起来讲。',cost:'翻旧账容易被当成私人恩怨，反而冲淡了你论据本身的分量。'},
+  赌徒:{name:'赌徒',emoji:'🎲',desc:'敢在信息不足的时候押。',habit:'明说"我这是赌"，愿意为押错承担后果。',cost:'押错的代价是全场一起承担的，别人未必愿意陪你赌。'},
+  老学究:{name:'老学究',emoji:'🔍',desc:'咬规则，抠字眼。',habit:'爱确认技能机制和流程细节，会纠正别人的用词。',cost:'纠结用词会拖慢节奏，容易被人嫌啰嗦。'},
+  观色者:{name:'观色者',emoji:'👀',desc:'更关注人怎么说，而不只是说了什么。',habit:'爱点出某人语气、态度、停顿上的变化。',cost:'这类观察本来就是软证据，说多了别人不认，还会反过来要求你拿硬的。'},
+  甩锅侠:{name:'甩锅侠',emoji:'🪃',desc:'被质疑的第一反应是反打回去。',habit:'不急着自证，先把问题抛回给质疑你的人。',cost:'不自证会让怀疑一直挂在你头上，越滚越大。'},
+  定盘星:{name:'定盘星',emoji:'⚖️',desc:'喜欢在最后收口。',habit:'听完所有人再给一个明确的归票建议。',cost:'归票的权重大，一旦收错口，整轮票都跟着错。'}
 };
 
 /* ================================================================
@@ -7998,13 +8011,14 @@ function loadGame(slotArg, opts) {
     // 恢复玩家（需要重新挂 role 对象）
     S.players = ss.players.map(p => {
       const role = p.customId ? resolveRoleForPlay(p.customId) : (ALL_ROLES[p.roleId] || ALL_ROLES['villager']);
-      const ks = Object.keys(MBTI_ALL);
-      const mbtiKey = p.mbtiKey || ks[p.id % ks.length];
+      const ks = Object.keys(TABLE_PERSONAS);
+      // 旧存档存的是 MBTI 键（ENTJ 等），新表里查不到：按座位派生一个，别让人格整个消失
+      const mbtiKey = (p.mbtiKey && TABLE_PERSONAS[p.mbtiKey]) ? p.mbtiKey : ks[p.id % ks.length];
       return {
         id: p.id, alive: p.alive, revealed: p.revealed,
         name: p.name, isPlayer: p.isPlayer, poisoned: p.poisoned || false,
         deathCause: p.deathCause, deathRound: p.deathRound, deathPhase: p.deathPhase,
-        role, mbti: MBTI_ALL[mbtiKey] || null, mbtiKey,
+        role, mbti: TABLE_PERSONAS[mbtiKey] || null, mbtiKey,
         _plan: p._plan || null, _planRound: p._planRound || null,
         ...(p._sk || {}),   // ★ 恢复技能已用/状态标记（愚者/白猫缓死/自创积木/赐予）
         memory: p.memory || []
@@ -10424,8 +10438,11 @@ function buildSystemPrompt(p, taskContext) {
   const hasPreset  = !!(playerConfigs[p.id] && playerConfigs[p.id].preset && playerConfigs[p.id].preset.trim());
   const selectedPrompt = playerConfigs[p.id] && promptLibrary[playerConfigs[p.id].promptId];
   if (selectedPrompt && selectedPrompt.content) styleBlock += '\n\n【模型专属指令（最高优先级）】\n' + selectedPrompt.content.trim();
-  const mbtiBlock = (!S.pureAI && p.mbti && !cosplayOn) ?
-    `\n【你是谁——先立住这个人，再开口】你叫「${p.name}」，性格(${p.mbtiKey})：${p.mbti.desc} 优点:${p.mbti.pos} 缺点:${p.mbti.neg}\n在心里把自己当成一个有脾气、有立场、有判断的具体的人来玩，而不是一个中立的分析程序。你有自己的观点，不必附和别人；别人说什么你先用自己的脑子过一遍，觉得不对就反驳，觉得对也要讲出你自己的理由。带点情绪、带点态度地说话，像真人吵架拌嘴，不要写分析报告、不要罗列要点、不要当复读机跟着大流走。\n但记住：推理和博弈才是核心，性格只是你说话的方式，别光顾着演而忘了找狼/藏身份。\n注意：不要在发言中提到你的性格类型(${p.mbtiKey})！` : '';
+  // ★「性情」开关此前只控制卡片上显不显示标签，根本不控制提示词注入——
+  //   用户以为关掉了，其实人格设定照样全量注入。这里让它名副其实。
+  const personaTagOn = !$('m-mbti') || $('m-mbti').checked;
+  const mbtiBlock = (!S.pureAI && p.mbti && !cosplayOn && personaTagOn) ?
+    `\n【你是谁——先立住这个人，再开口】你叫「${p.name}」，你的牌桌风格是【${p.mbtiKey}】：${p.mbti.desc}\n· 你的习惯：${p.mbti.habit}\n· 这种风格要付的代价：${p.mbti.cost}（这是打法上的代价，不是能力上的短板）\n在心里把自己当成一个有脾气、有立场、有判断的具体的人来玩，而不是一个中立的分析程序。别人说什么你先用自己的脑子过一遍，觉得不对就反驳，觉得对也要讲出你自己的理由。带点情绪、带点态度地说话，像真人聊天拌嘴，不要写分析报告、不要罗列要点、不要当复读机跟着大流走。\n【边界·最重要的一条】风格只决定你【怎么说话】和【什么时候下注】，不决定你【算得多清楚】。任何时候都要先把账算明白——谁死了、谁跳了、票型指向谁、这一步对哪一边有利——然后再用你的方式说出来。绝不要因为「我是这个风格」就故意少想一步、故意看漏证据，或者故意做出一个你自己都知道更差的选择。\n注意：不要在发言中提到「${p.mbtiKey}」这个标签本身。` : '';
   // ★ 角色扮演(Cosplay)人格注入 — 从 playerConfigs 读取用户自定义人设
   const userPersona = hasPersona ? playerConfigs[p.id].persona.trim() : '';
   const cosplayBlock = (cosplayOn && userPersona) ?
@@ -22431,8 +22448,8 @@ function startGame() {
     mbti:null, mbtiKey:''
   }));
   if (!S.pureAI) {
-    const ks = shuffle(Object.keys(MBTI_ALL));
-    S.players.forEach((p,i) => { const k=ks[i%ks.length]; p.mbti=MBTI_ALL[k]; p.mbtiKey=k; });
+    const ks = shuffle(Object.keys(TABLE_PERSONAS));
+    S.players.forEach((p,i) => { const k=ks[i%ks.length]; p.mbti=TABLE_PERSONAS[k]; p.mbtiKey=k; });
   }
   // ★ 人设随机池：若开启，从人设库随机抽取分配给未手动配人设的 AI
   applyPersonaPoolToPlayers();
