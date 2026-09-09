@@ -3164,6 +3164,7 @@ body.has-wp::after {
             <option value="medium">Medium</option>
             <option value="high">High</option>
             <option value="xhigh">Extra high</option>
+            <option value="max">Maximum (Claude only)</option>
           </select>
         </div>
         <div style="font-size:0.62em;color:#7068a0;padding:2px 6px 4px;line-height:1.5">Smart routing uses Low for checks, guards, votes, and other explicit actions; Medium for ordinary speech; and High for complex pact proposals. GPT-5/o-series, Claude, Gemini, and Kimi are supported, with on/off control for some Qwen, GLM, and MiniMax models. Unsupported levels are downgraded or retried without optional fields.</div>
@@ -3448,6 +3449,7 @@ body.has-wp::after {
         <option value="medium">Medium</option>
         <option value="high">High</option>
         <option value="xhigh">Extra high</option>
+        <option value="max">Maximum (Claude only)</option>
       </select>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;margin-top:8px;font-size:0.75em">
@@ -10508,17 +10510,90 @@ function resolveAIReasoning(p, prompt, opts) {
   });
 }
 // 重试降档：xhigh → high → medium → low。off/auto 不动（本来就没在烧预算）。
-const _REASONING_DOWNGRADE = Object.freeze({xhigh:'high', high:'medium', medium:'low', low:'low'});
+const _REASONING_DOWNGRADE = Object.freeze({max:'xhigh', xhigh:'high', high:'medium', medium:'low', low:'low'});
 function _degradeReasoning(mode, att) {
   let m = mode;
   for (let i = 1; i < att; i++) m = _REASONING_DOWNGRADE[m] || m;
   return m;
 }
 
+// ★ 思考模型家族识别：此前这段逻辑在【两个地方各写了一份】——callAI 的主路径和"测试连接"
+//   按钮——而且两份并不一致（测试那份的 Qwen/GLM 判定更松，还完全没有 Grok/DeepSeek/通用后缀）。
+//   加新家族时只改一处就会悄悄漂移，所以收敛成唯一的来源。
+function detectThinkingFlags(modelName, endpointUrl) {
+  const mn = String(modelName || '').toLowerCase();
+  const url = String(endpointUrl || '').toLowerCase();
+  const isGemini3Compat = mn.includes('gemini-3') || mn.includes('gemini3');
+  // GPT-5.x 全系（gpt-5 / gpt-5.2 / gpt-5.3 / gpt-5.4 及其 thinking/pro/mini/nano 变体）
+  const isGPT5Thinking = /gpt-?5(\.\d+)?/.test(mn) && !mn.includes('gpt-5-chat');
+  const isOpenAIReasoning = /(?:^|[\/_-])o(?:1|3|4)(?:[-_.]|$)/.test(mn);
+  // Claude 系列。Anthropic 原生参数是 output_config.effort（原生分支已经在发），但走 OpenAI
+  // 兼容端点时各家中转的映射不一：多数接受 reasoning_effort 并转译过去，少数原样透传，
+  // 少数直接 400。此前这里根本没有 Claude 分支，等于思考强度旋钮对 Claude 全程空转。
+  //   模型名不一定带 claude- 前缀：中转常直接暴露成 fable-5-1 / mythos-5-1 / opus-5 /
+  //   sonnet-5，只匹配 'claude' 会把 Fable、Mythos 整族以及裸型号名全都漏掉。
+  //   系列名要求出现在词首或分隔符之后，避免 magnum-opus-72b 这种名字误伤；即使真误判了，
+  //   代价也只是该端点上多付一个 400 往返，之后就被拒绝记忆表挡住。
+  const isClaudeReasoning = /claude|anthropic/.test(mn)
+    || /(?:^|[\/_-])(fable|mythos|opus|sonnet|haiku)(?:[-_.\d]|$)/.test(mn);
+  // Qwen 思考模型识别
+  //   ① qwen3-*-thinking / qwen-max-thinking 等带显式 thinking 后缀的版本
+  //   ② Qwen3.5 / Qwen3.6 系列是混合推理模型，默认就带思考能力（如 Qwen/Qwen3.6-27B），
+  //      即使模型名不带 thinking 后缀也需 thinking 预算保护，否则思考 token 会烧光
+  //      默认 max_tokens 导致可见回复被截断。
+  //      用精确的 qwen3.5 / qwen3.6 匹配，避免误伤旧 Qwen3 dense 系列（qwen3-32b 等）。
+  const isQwen3Thinking = (
+    ((mn.includes('qwen3') || mn.includes('qwen-max')) && mn.includes('thinking')) ||
+    /qwen[-_]?3\.[56]/.test(mn)
+  );
+  // Grok reasoning 版本（grok-4-fast-reasoning / grok-4-20-reasoning / grok-4.1-*-reasoning）
+  const isGrokReasoning = mn.includes('grok') && mn.includes('reasoning');
+  // GLM 思考版本（GLM-4.5+ 默认就是推理模式,即使模型名不带 thinking/reasoning 后缀）
+  //   覆盖:① glm-z1 / glm-*-reasoning 老命名 ② glm-4.5/4.6/4.7/5/5.1 新系列默认思考模式
+  //        ③ 反代格式 Pro/zai-org/GLM-5.1、ZHIPU/GLM-5 等(中转商常加前缀)
+  const isGLMThinking = (
+    mn.includes('glm-z') ||
+    /glm[-_]?(4\.[567]|5(\.\d+)?)/.test(mn) ||
+    (mn.includes('glm') && (mn.includes('reasoning') || mn.includes('thinking')))
+  );
+  const isKimiK2 = mn.includes('kimi-k2') || mn.includes('kimi_k2');
+  const isDeepSeekV4 = mn.includes('deepseek-v4') || mn.includes('deepseek_v4');
+  // MiniMax M2/M3: official and relay endpoints may expose thinking in content,
+  // reasoning_content, or reasoning_details. Model names on relays are not always canonical,
+  // so also inspect the endpoint URL.
+  const isMiniMaxThinking = mn.includes('minimax') || /(?:^|[\/_-])m[23](?:\.|[-_]|$)/.test(mn) || url.includes('minimax');
+  // 通用后缀兜底：带 -thinking / -reasoning 后缀且未被上述规则识别的模型
+  //   排除走原生独立字段的旧版 DeepSeek-reasoner，以及已有专属分支的 Claude
+  const isExcludedThinking = isClaudeReasoning || mn.includes('deepseek-reasoner') || mn.includes('deepseek-r1') || mn.includes('k2-thinking');
+  const hasGenericSuffix = !isExcludedThinking && (mn.includes('-thinking') || mn.includes('-reasoning') || mn.endsWith('thinking') || mn.endsWith('reasoning'));
+  const needsThinkingBudgetFix = isGemini3Compat || isGPT5Thinking || isOpenAIReasoning || isQwen3Thinking
+    || isGrokReasoning || isGLMThinking || isKimiK2 || isDeepSeekV4 || isMiniMaxThinking || isClaudeReasoning || hasGenericSuffix;
+  return {isGemini3Compat, isGPT5Thinking, isOpenAIReasoning, isClaudeReasoning, isQwen3Thinking,
+    isGrokReasoning, isGLMThinking, isKimiK2, isDeepSeekV4, isMiniMaxThinking,
+    hasGenericSuffix, needsThinkingBudgetFix, endpoint: url};
+}
+
+// ★ 端点拒绝记忆：有些中转不接受思考强度参数，会返回 400。此前每个请求都要先撞一次 400、
+//   去掉参数再重试——等于该端点上的每一次调用都白付一个往返。按 (端点, 模型) 记住结果，
+//   这个代价只在第一次付。因此下面可以放心地对更多家族"先发再说"。
+const _reasoningRejected = new Set();
+const _reasoningRejectKey = (url, model) => String(url || '').toLowerCase() + '|' + String(model || '').toLowerCase();
+function markReasoningRejected(url, model) { _reasoningRejected.add(_reasoningRejectKey(url, model)); }
+// 判定留在调用点，applyCompatibleReasoningControl 保持成纯映射函数（也才好单独测）
+function reasoningRejectedFor(url, model) { return _reasoningRejected.has(_reasoningRejectKey(url, model)); }
+
 function applyCompatibleReasoningControl(body, model, reasoning, flags) {
   const mode = reasoning.effective;
   const fields = [];
   if (mode === 'auto') return {applied:false, mode, fields};
+  // 档位取值：off 一律降到 low——兼容端点上没有可靠的"完全关思考"，而且 Fable 5/5.1 与
+  // Mythos 5.1 的思考本来就永远开着、Opus 5 在高档也不接受关闭。
+  // 上限则分家族：Anthropic 侧真支持 xhigh 和 max，砍掉等于白白丢一档；其余家目前只认
+  // low/medium/high，超出的降到 high。
+  const _claudeTier = !!flags.isClaudeReasoning;
+  const compatEffort = mode === 'off'
+    ? 'low'
+    : (_claudeTier ? mode : ((mode === 'xhigh' || mode === 'max') ? 'high' : mode));
 
   if (flags.isKimiK2) {
     body.chat_template_kwargs = Object.assign({}, body.chat_template_kwargs || {}, {thinking: mode !== 'off'});
@@ -10529,6 +10604,13 @@ function applyCompatibleReasoningControl(body, model, reasoning, flags) {
     }
   } else if (flags.isGPT5Thinking || flags.isOpenAIReasoning || flags.isGemini3Compat) {
     body.reasoning_effort = ReasoningControl.openAIEffort(flags.isGemini3Compat && mode === 'off' ? 'low' : mode, flags.isGPT5Thinking);
+    fields.push('reasoning_effort');
+  } else if (flags.isClaudeReasoning || flags.isGrokReasoning || flags.isDeepSeekV4 || flags.hasGenericSuffix) {
+    // 这几类此前要么完全没有分支（Claude），要么算出了 flag 却根本没传进来
+    // （Grok / DeepSeek-V4 / 通用后缀——它们只拿到了 max_tokens 保护）。
+    // 各家网关接受的参数名不统一，reasoning_effort 是覆盖面最广的一个；被拒绝时由上面的
+    // 记忆表兜底，所以最多只多付一个往返。
+    body.reasoning_effort = compatEffort;
     fields.push('reasoning_effort');
   } else if (flags.isQwen3Thinking || flags.isGLMThinking) {
     body.enable_thinking = mode !== 'off';
@@ -10988,46 +11070,9 @@ async function callAI(p, prompt, opts) {
       //   导致"抽风短回复"——尤其是两个同家族模型并发抢配额时必然出现。
       // ★ fix: 中转平台的 Kimi/DeepSeek 不一定规范返回 reasoning_content 独立字段，
       //   thinking 内容混入正文会烧光 token 导致短回复，需要同样加保护。
-      const isGemini3Compat = mn.includes('gemini-3') || mn.includes('gemini3');
-      // GPT-5.x 全系（gpt-5 / gpt-5.2 / gpt-5.3 / gpt-5.4 及其 thinking/pro/mini/nano 变体）
-      const isGPT5Thinking = /gpt-?5(\.\d+)?/.test(mn) && !mn.includes('gpt-5-chat');
-      const isOpenAIReasoning = /(?:^|[\/_-])o(?:1|3|4)(?:[-_.]|$)/.test(mn);
-      // Qwen 思考模型识别
-      //   ① qwen3-*-thinking / qwen-max-thinking 等带显式 thinking 后缀的版本
-      //   ② ★ v9.9.18: Qwen3.5 / Qwen3.6 系列是混合推理模型，默认就带思考能力
-      //      （如 Qwen/Qwen3.6-27B），即使模型名不带 thinking 后缀也需 thinking 预算保护，
-      //      否则思考 token 会烧光默认 max_tokens 导致可见回复被截断。
-      //      用精确的 qwen3.5 / qwen3.6 匹配，避免误伤旧 Qwen3 dense 系列（qwen3-32b 等）。
-      const isQwen3Thinking = (
-        ((mn.includes('qwen3') || mn.includes('qwen-max')) && mn.includes('thinking')) ||
-        /qwen[-_]?3\.[56]/.test(mn)
-      );
-      // Grok reasoning 版本（grok-4-fast-reasoning / grok-4-20-reasoning / grok-4.1-*-reasoning）
-      const isGrokReasoning = mn.includes('grok') && mn.includes('reasoning');
-      // GLM 思考版本（v9.5 修复:GLM-4.5+ 默认就是推理模式,即使模型名不带 thinking/reasoning 后缀）
-      //   覆盖:① glm-z1 / glm-*-reasoning 老命名 ② glm-4.5/4.6/4.7/5/5.1 新系列默认思考模式
-      //        ③ 反代格式 Pro/zai-org/GLM-5.1、ZHIPU/GLM-5 等(中转商常加前缀)
-      //   原因:智谱 GLM-5.x 思考模式默认开启,推理内容倒在 reasoning_content,
-      //        正式输出 content 会被截断成"半句话"或者单个英文名(如 "Yagami Light")
-      const isGLMThinking = (
-        mn.includes('glm-z') ||
-        /glm[-_]?(4\.[567]|5(\.\d+)?)/.test(mn) ||  // glm-4.5/4.6/4.7/5/5.1 系列
-        (mn.includes('glm') && (mn.includes('reasoning') || mn.includes('thinking')))
-      );
-      // ★ fix: Kimi-K2.x 系列（含中转路由格式 Pro/moonshotai/Kimi-K2.x）
-      const isKimiK2 = mn.includes('kimi-k2') || mn.includes('kimi_k2');
-      // ★ fix: DeepSeek V4 系列（deepseek-v4-pro / deepseek-v4-flash 等）
-      const isDeepSeekV4 = mn.includes('deepseek-v4') || mn.includes('deepseek_v4');
-      // MiniMax M2/M3: official and relay endpoints may expose thinking in content,
-      // reasoning_content, or reasoning_details. Model names on relays are not always canonical,
-      // so also inspect the endpoint URL.
-      const isMiniMaxThinking = mn.includes('minimax') || /(?:^|[\/_-])m[23](?:\.|[-_]|$)/.test(mn) || (useApi.url||'').toLowerCase().includes('minimax');
-      // 通用后缀兜底：带 -thinking / -reasoning 后缀且未被上述规则识别的模型
-      //   仅排除走原生独立字段的旧版 DeepSeek-reasoner 和标准 Claude
-      const isExcludedThinking = mn.includes('claude') || mn.includes('deepseek-reasoner') || mn.includes('deepseek-r1') || mn.includes('k2-thinking');
-      const hasGenericSuffix = !isExcludedThinking && (mn.includes('-thinking') || mn.includes('-reasoning') || mn.endsWith('thinking') || mn.endsWith('reasoning'));
-      // 综合判定：是否需要 thinking 预算保护
-      const needsThinkingBudgetFix = isGemini3Compat || isGPT5Thinking || isOpenAIReasoning || isQwen3Thinking || isGrokReasoning || isGLMThinking || isKimiK2 || isDeepSeekV4 || isMiniMaxThinking || hasGenericSuffix;
+      const {isGemini3Compat, isGPT5Thinking, isOpenAIReasoning, isClaudeReasoning, isQwen3Thinking,
+             isGrokReasoning, isGLMThinking, isKimiK2, isDeepSeekV4, isMiniMaxThinking,
+             hasGenericSuffix, needsThinkingBudgetFix} = detectThinkingFlags(mn, useApi.url);
 
       // ① 保护：max_tokens 下限抬到 8192，保证可见输出充足
       //   Gemini 3 单独抬到 16384——它的 thinking 和输出共享预算，狼人杀场景下 8K 仍易被烧光
@@ -11058,10 +11103,14 @@ async function callAI(p, prompt, opts) {
         delete body.frequency_penalty;
         delete body.presence_penalty;
       }
-      const reasoningCtl = applyCompatibleReasoningControl(body, useApi.model, reasoning, {
-        isKimiK2, isGPT5Thinking, isOpenAIReasoning, isGemini3Compat,
-        isQwen3Thinking, isGLMThinking, isMiniMaxThinking
-      });
+      // 这个端点已经明确拒绝过思考强度参数：别再撞第二次
+      const reasoningCtl = reasoningRejectedFor(useApi.url, useApi.model)
+        ? {applied:false, mode:reasoning.effective, fields:[], skipped:'endpoint-rejected'}
+        : applyCompatibleReasoningControl(body, useApi.model, reasoning, {
+            isKimiK2, isGPT5Thinking, isOpenAIReasoning, isGemini3Compat, isClaudeReasoning,
+            isQwen3Thinking, isGLMThinking, isMiniMaxThinking, isGrokReasoning, isDeepSeekV4,
+            hasGenericSuffix, endpoint: useApi.url
+          });
       if (reasoningCtl.applied) {
         Render.devLog('req', `[P${p.id+1}] reasoning=${reasoningCtl.mode} stage=${reasoning.stage} fields=${reasoningCtl.fields.join(',')}`);
       }
@@ -11112,6 +11161,7 @@ async function callAI(p, prompt, opts) {
         // Reasoning controls are optional. Remove them and retry if a compatible endpoint rejects them.
         const rejectedReasoning = reasoningCtl.fields.some(field => t.toLowerCase().includes(field.toLowerCase())) || /reasoning|thinking/i.test(t);
         if (res.status === 400 && reasoningCtl.applied && !isMiniMaxThinking && rejectedReasoning) {
+          markReasoningRejected(useApi.url, useApi.model);   // 记住，别每个请求都撞一次
           Render.devLog('err', `[P${p.id+1}] Endpoint rejected reasoning controls; retrying without them`);
           removeCompatibleReasoningControl(body);
           res = await fetch(useApi.url+'/chat/completions', {
@@ -24538,15 +24588,8 @@ async function testAPIForPC() {
         const testReasoning = ReasoningControl.resolveMode({
           globalMode:$('g-reasoning-mode') ? $('g-reasoning-mode').value : 'smart', playerMode:'inherit', opts:{skillConfirm:true}
         });
-        applyCompatibleReasoningControl(b, m, testReasoning, {
-          isKimiK2:mnLower.includes('kimi-k2') || mnLower.includes('kimi_k2'),
-          isGPT5Thinking:isGPT5Reasoning,
-          isOpenAIReasoning:/(?:^|[\/_-])o(?:1|3|4)(?:[-_.]|$)/.test(mnLower),
-          isGemini3Compat:mnLower.includes('gemini-3') || mnLower.includes('gemini3'),
-          isQwen3Thinking:mnLower.includes('qwen') && (mnLower.includes('thinking') || /qwen[-_]?3\.[56]/.test(mnLower)),
-          isGLMThinking:/glm[-_]?(4\.[567]|5(\.\d+)?)/.test(mnLower),
-          isMiniMaxThinking:mnLower.includes('minimax')
-        });
+        // 走和实际请求完全同一套检测，避免"测试通过但真跑起来行为不同"
+        applyCompatibleReasoningControl(b, m, testReasoning, detectThinkingFlags(m, u));
         return b;
       };
       const tryCall = async (testPrompt) => {
