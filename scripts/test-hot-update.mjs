@@ -35,8 +35,9 @@ function makeUpdater() {
 }
 
 function run({ source = SRC, native = true, hasPlugin = true, remote, localStorage = makeStorage(),
-               pathname = '/', connection } = {}) {
+               pathname = '/', connection, plugin = {} } = {}) {
   const up = makeUpdater();
+  Object.assign(up.plugin, plugin);
   const swRegs = [{ unregistered: false, unregister() { this.unregistered = true; return Promise.resolve(); } }];
   const deletedCaches = [];
   const ctx = {
@@ -211,6 +212,59 @@ for (const f of ['sw.js', 'en/sw.js']) {
     'APK 工作流必须把递增构建号写入 Android versionCode');
   ok(workflow.includes('versionName \\"1.0.${BUILD_NUMBER}\\"'),
     'APK 工作流必须同步写入可见的 Android versionName');
+}
+
+// Real plugin event contract: subscribe before download, clean up, and never invent progress.
+for (const pathname of ['/', '/en/']) {
+  let emit, finish, removed = 0, starts = 0;
+  const r = run({ source: stampedWith(700), remote: remoteAt(750), pathname, plugin: {
+    async addListener(name, cb) {
+      eq(name, 'download', '监听真实 download 事件');
+      emit = cb;
+      return { async remove() { removed++; } };
+    },
+    download() { starts++; return new Promise(resolve => { finish = resolve; }); }
+  } });
+  const first = r.api.check({ manual: true });
+  const second = r.api.check({ manual: true });
+  eq(first, second, '并发检查共用一个任务');
+  await new Promise(resolve => setImmediate(resolve));
+  eq(r.api.getState().percent, null, '没有回调时不编造百分比');
+  emit({ percent: 42, bundle: { version: '750' } });
+  eq(r.api.getState().percent, 42, '真实进度更新为42');
+  emit({ percent: 90, bundle: { version: '999' } });
+  eq(r.api.getState().percent, 42, '忽略其他包的进度');
+  emit({ percent: 20, bundle: { version: '750' } });
+  eq(r.api.getState().percent, 42, '乱序进度不倒退');
+  emit({ percent: 100, bundle: { version: '750' } });
+  eq(r.api.getState().phase, 'downloading', '100%不等于启用成功');
+  finish({ id: 'new-bundle' });
+  await first;
+  eq(starts, 1, '只下载一次');
+  eq(removed, 1, '下载完成移除监听器');
+  eq(r.api.getState().phase, 'staged', '下载后只标记待生效');
+  eq(r.api.build, 700, '运行构建号仍是旧版');
+}
+{
+  let tries = 0, removed = 0;
+  const r = run({ source: stampedWith(700), remote: remoteAt(750), plugin: {
+    async addListener() { return { async remove() { removed++; } }; },
+    async download() { if (++tries === 1) throw new Error('offline'); return { id: 'retry' }; }
+  } });
+  await r.api.check({ manual: true }).catch(() => {});
+  eq(r.api.getState().phase, 'failed', '失败留在常驻状态中');
+  eq(r.ctx.localStorage.getItem('wolfHotPending'), null, '失败不能留下成功标记');
+  await r.api.check({ manual: true });
+  eq(tries, 2, '失败后可以重试');
+  eq(removed, 2, '成功失败都清理监听器');
+}
+{
+  const r = run({ source: stampedWith(700), remote: remoteAt(750), plugin: {
+    async next() { throw new Error('schedule failed'); }
+  } });
+  await r.api.check({ manual: true }).catch(() => {});
+  eq(r.api.getState().phase, 'failed', '排期失败不显示已就绪');
+  eq(r.ctx.localStorage.getItem('wolfHotPending'), null, '排期失败不记pending');
 }
 
 console.log(`hot update: ${passed} 项检查通过`);

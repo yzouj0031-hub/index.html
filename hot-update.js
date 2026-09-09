@@ -81,14 +81,14 @@
     check: 'Check for updates',
     pending: v => 'Update ' + v + ' is ready — fully close and reopen the app to use it.'
   } : {
-    staged: v => '已在后台更新到 ' + v + '，下次启动生效。',
+    staged: v => '更新包 ' + v + ' 已下载，尚未生效。',
     current: '已经是最新版本。',
     checking: '正在检查更新…',
     failed: '检查更新失败。',
     needsApk: '新版本需要重新安装安装包，点这里打开下载页。',
     version: '版本',
     check: '检查更新',
-    pending: v => '更新 ' + v + ' 已就绪，完全退出再打开即可生效。'
+    pending: v => '曾下载更新 ' + v + '，当前仍未运行此版本。若重启后仍如此，更新可能未切换或已回滚。'
   };
 
   async function fetchJson(url) {
@@ -116,13 +116,48 @@
     return !!(c && (c.saveData || /^(slow-2g|2g)$/.test(c.effectiveType || '')));
   }
 
-  async function check(opts) {
+  let inFlight = null;
+  let uiState = { phase: 'idle', text: '', percent: null };
+  function setState(phase, text, percent = null) {
+    uiState = { phase, text, percent };
+    renderState();
+  }
+  function renderState() {
+    const status = document.getElementById('wolf-hot-status');
+    const progress = document.getElementById('wolf-hot-progress');
+    const button = document.getElementById('wolf-hot-check');
+    if (status) status.textContent = uiState.text;
+    if (button) button.disabled = !!inFlight;
+    if (progress) {
+      progress.hidden = !['downloading', 'preparing', 'staged'].includes(uiState.phase);
+      if (uiState.percent === null) progress.removeAttribute('value');
+      else progress.value = uiState.percent;
+    }
+  }
+  function check(opts) {
+    if (inFlight) return inFlight;
+    inFlight = performCheck(opts).then(r => {
+      if (r.status === 'current') setState('current', T.current);
+      else if (r.status === 'pending') setState('pending', T.pending(r.version || r.build));
+      else if (r.status === 'staged') setState('staged', T.staged(r.version || r.build), 100);
+      else if (r.status === 'needs-apk') setState('needs-apk', T.needsApk);
+      else if (r.status === 'skipped-metered') setState('idle', EN ? 'Data saver: tap Check to download.' : '省流量模式未自动下载，可点检查更新手动下载。');
+      return r;
+    }).catch(e => {
+      setState('failed', T.failed + ' ' + (e && e.message ? e.message : '') + (EN ? ' Tap Check to retry.' : ' 可再次点检查更新重试。'));
+      throw e;
+    }).finally(() => { inFlight = null; renderState(); });
+    renderState();
+    return inFlight;
+  }
+  async function performCheck(opts) {
     const manual = !!(opts && opts.manual);
     let last = 0;
     try { last = Number(localStorage.getItem(LS_LAST)) || 0; } catch (e) {}
     if (!manual && Date.now() - last < CHECK_INTERVAL_MS) return { status: 'skipped' };
     try { localStorage.setItem(LS_LAST, String(Date.now())); } catch (e) {}
 
+    setState('checking', T.checking);
     const meta = await fetchJson(MANIFEST_URL);
     if (!meta || !Number.isInteger(meta.build)) throw new Error('version.json 格式错误');
 
@@ -140,6 +175,22 @@
     if (!manual && metered()) return { status: 'skipped-metered', build: meta.build };
 
     // checksum 交给插件校验（sha256）；下错/下断会直接抛错，不会落地半个包。
+    let listener;
+    let lastPercent = 0;
+    setState('downloading', EN ? 'Downloading update… waiting for progress.' : '正在下载更新包…等待下载进度。');
+    try {
+      if (typeof Updater.addListener === 'function') {
+        try {
+          listener = await Updater.addListener('download', event => {
+            if (uiState.phase !== 'downloading' || !event ||
+                !event.bundle || String(event.bundle.version) !== String(meta.build) ||
+                typeof event.percent !== 'number' || !Number.isFinite(event.percent)) return;
+            lastPercent = Math.max(lastPercent, Math.min(100, Math.max(0, Math.floor(event.percent))));
+            setState('downloading', (EN ? 'Downloading ' : '正在下载 ') + meta.version + ' · ' + lastPercent + '%' +
+              (lastPercent === 100 ? (EN ? ' — verifying/preparing…' : ' · 正在校验、准备更新包…') : ''), lastPercent);
+          });
+        } catch (e) { /* Older bridges can download without progress events; stay indeterminate. */ }
+      }
     const bundle = await Updater.download({
       url: meta.zipUrl || FALLBACK_ZIP,
       version: String(meta.build),
@@ -148,9 +199,15 @@
     if (!bundle || !bundle.id) throw new Error('下载返回异常');
 
     // next 而不是 set：不打断当前这一局，切后台或重启时才换过去。
+    setState('preparing', EN ? 'Download complete. Scheduling update…' : '下载完成，正在安排下次启动使用…');
     await Updater.next({ id: bundle.id });
     try { localStorage.setItem(LS_PENDING, String(meta.build)); } catch (e) {}
     return { status: 'staged', build: meta.build, version: meta.version };
+    } finally {
+      if (listener && typeof listener.remove === 'function') {
+        try { await listener.remove(); } catch (e) {}
+      }
+    }
   }
 
   /* ── 轻量提示条：不依赖 app 自身的 CSS ── */
@@ -188,10 +245,11 @@
     const row = document.createElement('div');
     row.id = 'wolf-hot-row';
     row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;' +
-      'margin:6px 0 2px;padding:0 4px;font-size:.72em;color:#8a7e6a;';
+      'flex-wrap:wrap;margin:6px 0 2px;padding:8px 4px;font-size:.85em;color:#b8ad98;';
     const label = document.createElement('span');
-    label.textContent = T.version + ' ' + APP_VERSION;
+    label.textContent = (EN ? 'Running: ' : '当前运行：') + APP_VERSION + ' · b' + APP_BUILD;
     const btn = document.createElement('button');
+    btn.id = 'wolf-hot-check';
     btn.textContent = T.check;
     btn.style.cssText = 'background:none;border:1px solid rgba(200,168,76,.35);color:#c8a84c;' +
       'border-radius:6px;padding:3px 10px;font-size:1em;cursor:pointer;';
@@ -202,8 +260,22 @@
       catch (e) { toast(T.failed + ' ' + (e && e.message ? e.message : '')); }
       finally { btn.disabled = false; }
     };
-    row.append(label, btn);
+    const status = document.createElement('div');
+    status.id = 'wolf-hot-status';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    status.style.cssText = 'flex-basis:100%;line-height:1.6;overflow-wrap:anywhere;';
+    const progress = document.createElement('progress');
+    progress.id = 'wolf-hot-progress';
+    progress.max = 100;
+    progress.setAttribute('aria-label', EN ? 'Update download progress' : '更新包下载进度');
+    progress.style.cssText = 'width:100%;height:16px;accent-color:#c8a84c;';
+    row.append(label, btn, status, progress);
     anchor.insertAdjacentElement('afterend', row);
+    let pending = 0;
+    try { pending = Number(localStorage.getItem(LS_PENDING)) || 0; } catch (e) {}
+    if (uiState.phase === 'idle' && pending > APP_BUILD) setState('pending', T.pending('b' + pending));
+    renderState();
   }
 
   window.WolfHotUpdate = {
@@ -211,6 +283,7 @@
     version: APP_VERSION,
     nativeAbi: NATIVE_ABI,
     check,
+    getState: () => ({ ...uiState }),
     markBootOk
   };
 
